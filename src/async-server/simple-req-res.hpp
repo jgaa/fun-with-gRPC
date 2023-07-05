@@ -135,6 +135,8 @@ public:
             << " listening on " << serverAddress;
     }
 
+    // Start the event-loop in another thread.
+    // Returns immediately
     void run(const std::string& serverAddress) {
         init(serverAddress);
 
@@ -180,7 +182,6 @@ public:
                 case grpc::CompletionQueue::NextStatus::SHUTDOWN:
                     LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
                     return;
-                break;
                 } // switch
             } // loop
 
