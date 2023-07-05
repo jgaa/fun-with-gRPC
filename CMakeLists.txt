@@ -5,6 +5,8 @@ project(fun-with-grpc
     VERSION 0.0.1
     LANGUAGES CXX)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 set(FUN_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
 include(GNUInstallDirs)

@@ -17,6 +17,9 @@
 #include <iostream>
 #include <filesystem>
 #include <boost/program_options.hpp>
+#include <boost/asio.hpp>
+
+#include "simple-req-res.hpp"
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
@@ -28,8 +31,51 @@ namespace {
 // The gRPC address we will use
 std::string address = "127.0.0.1:10123";
 
-void process() {
+template <typename T>
+void handleSignals(auto& signals, bool& done, T& service) {
+    signals.async_wait([&](const boost::system::error_code& ec, int signalNumber) {
 
+        if (ec) {
+            if (ec == boost::asio::error::operation_aborted) {
+                LOG_TRACE << "handleSignals: Handler aborted.";
+                return;
+            }
+            LOG_WARN << "handleSignals - Received error: " << ec.message();
+            return;
+        }
+
+        LOG_INFO << "handleSignals - Received signal #" << signalNumber;
+        if (signalNumber == SIGHUP) {
+            LOG_WARN << "handleSignals - Ignoring SIGHUP. Note - config is not re-loaded.";
+        } else if (signalNumber == SIGQUIT || signalNumber == SIGINT) {
+            if (!done) {
+                LOG_INFO << "handleSignals - Stopping the service.";
+                service.stop();
+                done = true;
+            }
+            return;
+        } else {
+            LOG_WARN << "handleSignals - Ignoring signal #" << signalNumber;
+        }
+
+        handleSignals(signals, done, service);
+    });
+}
+
+void process() {
+    SimpleReqRespSvc svc;
+    svc.run(address);
+
+    // Let's allow the suer to exit the server with ctl-C
+    boost::asio::io_context ctx;
+    boost::asio::signal_set signals{ctx, SIGINT, SIGQUIT, SIGHUP};
+
+    bool done = false;
+    handleSignals(signals, done, svc);
+
+    // Use the main thread to run asio's event-loop.
+    // run() will return when the signal-handler is done.
+    ctx.run();
 }
 
 } // anon ns
