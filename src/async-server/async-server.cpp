@@ -20,9 +20,8 @@
 #include <boost/asio.hpp>
 
 #include "simple-req-res.hpp"
-
-#include "route_guide.grpc.pb.h"
-#include "funwithgrpc/logging.h"
+#include "unary-and-streams.hpp"
+#include "test-config.h"
 
 using namespace std;
 
@@ -30,6 +29,9 @@ namespace {
 
 // The gRPC address we will use
 std::string address = "127.0.0.1:10123";
+std::string server_type = "first";
+
+Config config;
 
 template <typename T>
 void handleSignals(auto& signals, bool& done, T& service) {
@@ -62,20 +64,32 @@ void handleSignals(auto& signals, bool& done, T& service) {
     });
 }
 
-void process() {
-    SimpleReqRespSvc svc;
-    svc.run(address);
-
+template <typename T>
+void runSvc() {
     // Let's allow the suer to exit the server with ctl-C
     boost::asio::io_context ctx;
     boost::asio::signal_set signals{ctx, SIGINT, SIGQUIT, SIGHUP};
 
     bool done = false;
+
+    T svc{config};
+    svc.run(address);
+
     handleSignals(signals, done, svc);
 
     // Use the main thread to run asio's event-loop.
     // run() will return when the signal-handler is done.
     ctx.run();
+}
+
+void process() {
+    if (server_type == "first") {
+        runSvc<SimpleReqRespSvc>();
+    } else if (server_type == "second") {
+        runSvc<UnaryAndSingleStreamSvc>();
+    } else {
+        throw runtime_error{"Unknows server: "s + server_type};
+    }
 }
 
 } // anon ns
@@ -97,9 +111,17 @@ int main(int argc, char* argv[]) {
         ("address,a",
          po::value(&address)->default_value(address),
          "Network address to use for gRPC.")
+        ("server,s",
+         po::value(&server_type)->default_value(server_type),
+         "Server-type to run. One of: 'first', 'second'. "
+         "First implements only the unary RPC method. Second implements the unary "
+         "methods and streams in one direction.")
         ("log-to-console,C",
          po::value(&log_level_console)->default_value(log_level_console),
          "Log-level to the console; one of 'info', 'debug', 'trace'. Empty string to disable.")
+        ("num-stream-messages",
+         po::value(&config.num_stream_messages_)->default_value(config.num_stream_messages_),
+         "Number of messages to send in a reply-stream.")
         ;
 
     po::options_description cmdline_options;

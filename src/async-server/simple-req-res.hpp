@@ -10,6 +10,7 @@
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
+#include "test-config.h"
 
 /*!
  * \brief The SimpleReqRespSvc class
@@ -55,9 +56,17 @@ public:
                 // OneRequest, so the service can handle a new request from a client.
                 createNew(service_, cq_);
 
-                // Let's return something.
+                // This is where we have the request, and may formulate an answer.
+                // If this was code for a framework, this is where we would have called
+                // the `onRpcRequestGetFeature()` method, or unblocked the next statement
+                // in a co-routine waiting for the next request.
+                //
+                // In our case, let's just return something.
                 reply_.set_name("whatever");
                 reply_.mutable_location()->CopyFrom(req_);
+
+                // Initiate our next async operation.
+                // That will complete when we have sent the reply, or replying failed.
                 resp_.Finish(reply_, ::grpc::Status::OK, this);
 
                 // This instance is now active.
@@ -68,12 +77,12 @@ public:
             case State::REPLIED:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
-                    // Let's end it here.
                     LOG_WARN << "The reply-operation failed.";
                 }
 
                 state_ = State::DONE; // Not required, but may be useful if we investigate a crash.
 
+                // We are done. There will be no further events for this instance.
                 return done();
 
             default:
@@ -117,7 +126,7 @@ public:
     };
 
 
-    SimpleReqRespSvc() = default;
+    SimpleReqRespSvc(Config&)  {}
 
     void init(const std::string& serverAddress) {
         grpc::ServerBuilder builder;

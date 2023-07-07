@@ -136,7 +136,7 @@ public:
                 LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
                 return;
             } // switch
-        }
+        } // event-loop
     }
 
     void close() {
