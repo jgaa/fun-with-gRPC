@@ -47,7 +47,7 @@ public:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
                     // Let's end it here.
-                    LOG_WARN << "The request-operation failed. Assumig we are shutting down";
+                    LOG_WARN << "The request-operation failed. Assuming we are shutting down";
                     return done();
                 }
 
@@ -72,7 +72,7 @@ public:
                     LOG_WARN << "The reply-operation failed.";
                 }
 
-                state_ = State::DONE; // Not reqired, but may be useful if we investigate a crash.
+                state_ = State::DONE; // Not required, but may be useful if we investigate a crash.
 
                 return done();
 
@@ -159,7 +159,7 @@ public:
                 // Get any IO operation that is ready.
                 const auto status = cq_->AsyncNext(&tag, &ok, deadline);
 
-                // So, here we deal with the first of the three states: The status of Next().
+                // So, here we deal with the first of the three states: The status from Next().
                 switch(status) {
                 case grpc::CompletionQueue::NextStatus::TIMEOUT:
                     LOG_DEBUG << "AsyncNext() timed out.";

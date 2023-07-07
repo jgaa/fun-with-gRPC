@@ -18,7 +18,7 @@ target_include_directories(${PROJECT_NAME}
     $<BUILD_INTERFACE:${FUN_ROOT}/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
-    $<BUILD_INTERFACE: ${CMAKE_BINARY_DIR}/generated-include>
+    $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/generated-include>
     )
 
 target_link_libraries(${PROJECT_NAME}

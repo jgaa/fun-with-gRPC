@@ -14,11 +14,8 @@ public:
         OneRequest(SimpleReqResClient& parent)
                 : parent_{parent} {
 
-            stub_ = ::routeguide::RouteGuide::NewStub(parent_.channel_);
-            assert(stub_);
-
             // Initiate the async request.
-            rpc_ = stub_->AsyncGetFeature(&ctx_, req_, &parent_.cq_);
+            rpc_ = parent_.stub_->AsyncGetFeature(&ctx_, req_, &parent_.cq_);
             assert(rpc_);
 
             // Add the operation to the queue, so we get notified when
@@ -28,9 +25,6 @@ public:
 
             // Reference-counting of instances of requests in flight
             parent.incCounter();
-        }
-
-        ~OneRequest() {
         }
 
         void proceed(bool ok) {
@@ -63,12 +57,13 @@ public:
         }
 
         SimpleReqResClient& parent_;
+
+        // We need quite a few variables to perform our single RPC call.
         ::routeguide::Point req_;
         ::routeguide::Feature reply_;
         ::grpc::Status status_;
         std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::routeguide::Feature>> rpc_;
         ::grpc::ClientContext ctx_;
-        std::unique_ptr<::routeguide::RouteGuide::Stub> stub_;
     };
 
     SimpleReqResClient(size_t numRequests, size_t parallelRequests)
@@ -78,6 +73,7 @@ public:
     // Returns when there are no more requests to send
     void run(const std::string& serverAddress) {
 
+        LOG_INFO << "Connecting to gRPC service at: " << serverAddress;
         channel_ = grpc::CreateChannel(serverAddress, grpc::InsecureChannelCredentials());
 
         // Is it a "lame channel"?
@@ -91,11 +87,13 @@ public:
 
         // For some reason, the code below always fail.
         // So, don't use GetState to see if you can connect to the server.
-//        LOG_INFO << "Conneting to " << serverAddress;
 //        if (auto status = channel_->GetState(true); status != GRPC_CHANNEL_READY) {
 //            LOG_ERROR << "Failed to connect to " << serverAddress;
 //            return;
 //        }
+
+        stub_ = ::routeguide::RouteGuide::NewStub(channel_);
+        assert(stub_);
 
         // Add request(s)
         for(auto i = 0; i < parallel_requests_;  ++i) {
@@ -172,7 +170,13 @@ public:
 private:
     // This is the Queue. It's shared for all the requests.
     ::grpc::CompletionQueue cq_;
+
+    // This is a connection to the gRPC server
     std::shared_ptr<grpc::Channel> channel_;
+
+    // An instance of the client that was generated from our .proto file.
+    std::unique_ptr<::routeguide::RouteGuide::Stub> stub_;
+
     std::atomic_size_t pending_requests_{0};
     std::atomic_size_t request_count{0};
     const size_t num_requests_;

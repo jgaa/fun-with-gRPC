@@ -70,17 +70,6 @@ void process() {
     // Unlike the server, here we use the main-thread to run the event-loop.
     // run() returns when we are finished with the requests.
     client.run(address);
-
-//    // Let's allow the suer to exit the server with ctl-C
-//    boost::asio::io_context ctx;
-//    boost::asio::signal_set signals{ctx, SIGINT, SIGQUIT, SIGHUP};
-
-//    bool done = false;
-//    handleSignals(signals, done, svc);
-
-//    // Use the main thread to run asio's event-loop.
-//    // run() will return when the signal-handler is done.
-//    ctx.run();
 }
 
 } // anon ns
@@ -108,7 +97,7 @@ int main(int argc, char* argv[]) {
         ("num-requests,r",
          po::value(&num_requests)->default_value(num_requests),
          "Total number of requests to send.")
-        ("parallell-requests,p",
+        ("parallel-requests,p",
          po::value(&parallel_requests)->default_value(parallel_requests),
          "Number of requests to send in parallel.")
         ;
