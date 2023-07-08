@@ -224,6 +224,11 @@ public:
                 // in a co-routine awaiting the next state-change.
                 //
                 // In our case, let's just return something.
+
+                // Prepare the reply-object to be re-used.
+                // This is usually cheaper than creating a new one for each write operation.
+                reply_.Clear();
+
                 // Since it's a stream, it make sense to return different data for each message.
                 reply_.set_name(std::string{"stream-reply #"} + std::to_string(replies_));
 

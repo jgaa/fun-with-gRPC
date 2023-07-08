@@ -20,9 +20,9 @@
 #include <boost/asio.hpp>
 
 #include "unary-client.hpp"
+#include "unary-and-stream-client.hpp"
 
-#include "route_guide.grpc.pb.h"
-#include "funwithgrpc/logging.h"
+#include "Config.h"
 
 using namespace std;
 
@@ -30,8 +30,9 @@ namespace {
 
 // The gRPC address we will use
 std::string address = "127.0.0.1:10123";
-size_t num_requests{1};
-size_t parallel_requests = 1;
+std::string client_type = "first";
+
+Config config;
 
 template <typename T>
 void handleSignals(auto& signals, bool& done, T& client) {
@@ -64,12 +65,23 @@ void handleSignals(auto& signals, bool& done, T& client) {
     });
 }
 
-void process() {
-    SimpleReqResClient client{num_requests, parallel_requests};
+template <typename T>
+void runClient() {
+    T client(config);
 
     // Unlike the server, here we use the main-thread to run the event-loop.
     // run() returns when we are finished with the requests.
     client.run(address);
+}
+
+void process() {
+    if (client_type == "first") {
+        runClient<SimpleReqResClient>();
+    } else if (client_type == "second") {
+        runClient<UnaryAndSingleStreamClient>();
+    } else {
+        throw runtime_error{"Unknows client-type: "s + client_type};
+    }
 }
 
 } // anon ns
@@ -91,15 +103,29 @@ int main(int argc, char* argv[]) {
         ("address,a",
          po::value(&address)->default_value(address),
          "Network address to use for gRPC.")
+        ("client,c",
+         po::value(&client_type)->default_value(client_type),
+         "Client-type to run. One of: 'first', 'second'. "
+         "First implements only the unary RPC method. Second implements the unary "
+         "methods and streams in one direction.")
+
+        ("request-type,t",
+         // Ugly, but valid.
+         po::value(reinterpret_cast<int *>(&config.request_type))
+             ->default_value(static_cast<int>(config.request_type)),
+         "Reqest to send:\n   0=GetFeature()\n   1=ListFeatures()\n")
         ("log-to-console,C",
          po::value(&log_level_console)->default_value(log_level_console),
          "Log-level to the console; one of 'info', 'debug', 'trace'. Empty string to disable.")
         ("num-requests,r",
-         po::value(&num_requests)->default_value(num_requests),
+         po::value(&config.num_requests)->default_value(config.num_requests),
          "Total number of requests to send.")
         ("parallel-requests,p",
-         po::value(&parallel_requests)->default_value(parallel_requests),
+         po::value(&config.parallel_requests)->default_value(config.parallel_requests),
          "Number of requests to send in parallel.")
+        ("stream-messages,s",
+         po::value(&config.stream_messages)->default_value(config.stream_messages),
+         "Number of messages to send in a stream (for requests with an outgoing stream).")
         ;
 
     po::options_description cmdline_options;

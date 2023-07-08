@@ -2,6 +2,8 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include "Config.h"
+
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
 
@@ -66,8 +68,8 @@ public:
         ::grpc::ClientContext ctx_;
     };
 
-    SimpleReqResClient(size_t numRequests, size_t parallelRequests)
-        : num_requests_{numRequests}, parallel_requests_{parallelRequests} {}
+    SimpleReqResClient(const Config& config)
+        : config_{config} {}
 
     // Run the event-loop.
     // Returns when there are no more requests to send
@@ -96,7 +98,7 @@ public:
         assert(stub_);
 
         // Add request(s)
-        for(auto i = 0; i < parallel_requests_;  ++i) {
+        for(auto i = 0; i < config_.parallel_requests;  ++i) {
             createRequest();
         }
 
@@ -144,8 +146,8 @@ public:
     }
 
     void createRequest() {
-        if (++request_count > num_requests_) {
-            LOG_TRACE << "We have already started " <<num_requests_ << " requests.";
+        if (++request_count > config_.num_requests) {
+            LOG_TRACE << "We have already started " << config_.num_requests << " requests.";
             return; // We are done
         }
 
@@ -177,8 +179,7 @@ private:
     // An instance of the client that was generated from our .proto file.
     std::unique_ptr<::routeguide::RouteGuide::Stub> stub_;
 
+    const Config& config_;
     std::atomic_size_t pending_requests_{0};
     std::atomic_size_t request_count{0};
-    const size_t num_requests_;
-    const size_t parallel_requests_;
 };
