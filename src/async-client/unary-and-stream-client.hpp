@@ -51,7 +51,8 @@ public:
 
             void proceed(bool ok) {
                 if (instance_.parent_.config_.do_push_back_on_queue) {
-                    if (!pushed_back_) {
+                    // Handle failures immediately.
+                    if (ok && !pushed_back_) {
                         // Work-around to push the event to the end of the queue.
                         // By default the "queue" works like a stack, which is not what most
                         // devs excpect or want.
@@ -64,14 +65,13 @@ public:
                         return;
                     }
 
-                    // Now we are ready for the next operation on this tag.
-                    pushed_back_ = false;
+                    if (pushed_back_) {
+                        ok = pushed_ok_;
 
-                    // We don't handle the situation where the alarm-event returned an error.
-                    assert(ok);
-                    ok = pushed_ok_;
+                        // Now we are ready for the next operation on this tag.
+                        pushed_back_ = false;
+                    }
                 }
-
 
                 LOG_TRACE << "Handle::proceed() - executing the delayed " << op_
                           << " operation. handles_in_flight_=" << instance_.parent_.handles_in_flight_;;
@@ -160,7 +160,7 @@ public:
         }
 
     private:
-        Handle handle_{*this, Handle::Operation::CONNECT};
+        Handle handle_{*this, Handle::Operation::FINISH};
 
         // We need quite a few variables to perform our single RPC call.
         ::routeguide::Point req_;
@@ -177,6 +177,7 @@ public:
         enum class State {
             CREATED,
             CONNECTING,
+            CONNECT_FAILED,
             READING,
             READ_FAILED,
             FINISHED
@@ -224,7 +225,12 @@ public:
                 if (!ok) [[unlikely]] {
                     LOG_WARN << me()
                              << " - The request failed. Status: " << status_.error_message();
-                    return done();
+                    if (state_ == State::FINISHED) {
+                        LOG_TRACE << me() << " - I got the failed CONNECT I was waiting for. I'm done now. Promise...";
+                        return done();
+                    }
+                    state_ = State::CONNECT_FAILED;
+                    return;
                 }
 
                 LOG_TRACE << me()
@@ -280,7 +286,7 @@ public:
                     parent_.nextRequest();
                 }
 
-                if (state_ != State::READING) {
+                if (state_ != State::READING && state_ != State::CONNECTING) {
                     LOG_TRACE << me() << " - finishing.";
                     return done(); // There will be no more events
                 }
