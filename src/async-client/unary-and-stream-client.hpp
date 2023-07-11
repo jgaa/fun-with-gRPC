@@ -45,11 +45,21 @@ public:
             Handle(RequestBase& instance, Operation op)
                 : instance_{instance}, op_{op} {}
 
-            void *tag() {
+            /*! Return a tag for an async operation.
+             *
+             *  Note that we use this method for reference-counting
+             *  the pending async operations, so it cannot be called
+             *  for other purposes!
+             */
+            [[nodiscard]] void *tag() {
+                ++instance_.ref_cnt_;
                 return this;
             }
 
             void proceed(bool ok) {
+                assert(instance_.ref_cnt_ > 0);
+                --instance_.ref_cnt_;
+
                 if (instance_.parent_.config_.do_push_back_on_queue) {
                     // Handle failures immediately.
                     if (ok && !pushed_back_) {
@@ -73,10 +83,15 @@ public:
                     }
                 }
 
-                LOG_TRACE << "Handle::proceed() - executing the delayed " << op_
-                          << " operation. handles_in_flight_=" << instance_.parent_.handles_in_flight_;;
+                LOG_TRACE << "Handle::proceed() - executing " << op_
+                          << " operation. handles_in_flight_=" << instance_.parent_.handles_in_flight_
+                          << " refcount=" << instance_.ref_cnt_;
 
                 instance_.proceed(ok, op_);
+
+                if (instance_.ref_cnt_ == 0) {
+                    instance_.done();
+                }
             }
 
         private:
@@ -98,10 +113,10 @@ public:
         virtual void proceed(bool ok, Handle::Operation op) = 0;
 
 
-        virtual void done() {
+        void done() {
             // Ugly, ugly, ugly
             LOG_TRACE << "If the program crash now, it was a bad idea to delete this ;)  #"
-                      << client_id_ << " at address" << this;
+                      << client_id_ << " at address " << this;
 
             // Reference-counting of instances of requests in flight
             parent_.decCounter();
@@ -111,6 +126,7 @@ public:
     protected:
         // The state required for all requests
         UnaryAndSingleStreamClient& parent_;
+        int ref_cnt_ = 0;
         ::grpc::ClientContext ctx_;
         const size_t client_id_;
     };
@@ -141,22 +157,22 @@ public:
             if (!ok) [[unlikely]] {
                 LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
                          << " - The request failed. Status: " << status_.error_message();
-                return done();
+                return;
             }
 
-            // Initiate a new request
-            parent_.nextRequest();
 
             if (status_.ok()) {
                 LOG_TRACE << boost::typeindex::type_id_runtime(*this).pretty_name()
                           << " - Request successful. Message: " << reply_.name();
+
+                // Initiate a new request
+                parent_.nextRequest();
             } else {
                 LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
                          << " - The request failed with error-message: " << status_.error_message();
             }
 
             // The reply is a single message, so at this time we are done.
-            done();
         }
 
     private:
@@ -174,15 +190,6 @@ public:
      */
     class ListFeaturesRequest : public RequestBase {
     public:
-        enum class State {
-            CREATED,
-            CONNECTING,
-            CONNECT_FAILED,
-            READING,
-            READ_FAILED,
-            FINISHED
-        };
-
         // Now we are implementing an actual, trivial state-machine, as
         // we will return an unknown number of messages.
 
@@ -195,7 +202,6 @@ public:
             // before we should (can?) start reading the replies.
             rpc_ = parent_.stub_->AsyncListFeatures(&ctx_, req_, &parent_.cq_, connect_handle.tag());
             assert(rpc_);
-            state_ = State::CONNECTING;
 
             // Also register a Finish handler, so we know when we are
             // done or failed. This is where we get the server's status when deal with
@@ -211,47 +217,32 @@ public:
 
         // As promised, the state-machine get's more complex when we have
         // streams. In this case, we have three states to deal with on each invocation:
-        // 1) The state of the instance.
+        // 1) The state of the instance - how many async operations have we started?
+        //    This is handled by reference-counting, so we don't have to deal with it in
+        //    the loop. This greatly reduce the code below.
         // 2) The operation
         // 3) The ok boolean value.
         void proceed(bool ok, Handle::Operation op) override {
 
-            LOG_TRACE << me() << " - proceed(): state="
-                      << static_cast<int>(state_) << ", ok=" << ok << ", op=" << op;
+            LOG_TRACE << me() << " - proceed(): ok=" << ok << ", op=" << op;
 
             switch(op) {
 
             case Handle::Operation::CONNECT:
                 if (!ok) [[unlikely]] {
-                    LOG_WARN << me()
-                             << " - The request failed. Status: " << status_.error_message();
-                    if (state_ == State::FINISHED) {
-                        LOG_TRACE << me() << " - I got the failed CONNECT I was waiting for. I'm done now. Promise...";
-                        return done();
-                    }
-                    state_ = State::CONNECT_FAILED;
+                    LOG_WARN << me() << " - The request failed.";
                     return;
                 }
 
-                LOG_TRACE << me()
-                          << " - a new request is in progress.";
+                LOG_TRACE << me() << " - a new request is in progress.";
 
                 // Now, register a read operation.
                 rpc_->Read(&reply_, read_handle.tag());
-                state_ = State::READING;
                 break;
 
             case Handle::Operation::READ:
                 if (!ok) [[unlikely]] {
-                    if (state_ == State::FINISHED) {
-                        LOG_TRACE << me() << " - I got the failed READ I was waiting for. I'm done now. Promise...";
-                        return done();
-                    }
-
                     LOG_TRACE << me() << " - Failed to read a message. Status: " << status_.error_message();
-
-                    state_ = State::READ_FAILED;
-                    // What do we do now? Can this ever even happen?
                     return;
                 }
 
@@ -276,23 +267,15 @@ public:
                 LOG_TRACE << me() << " - entering FINISH OP";
                 if (!ok) [[unlikely]] {
                     LOG_WARN << me() << " - Failed to FINISH! Status: " << status_.error_message();
-                    return done();
+                    return;
                 }
 
-                if (!status_.ok()) {
-                    LOG_WARN << me() << " - The request finished with error-message: " << status_.error_message();
-                } else {
+                if (status_.ok()) {
                     LOG_TRACE << me() << " - Initiating a new request";
                     parent_.nextRequest();
+                } else {
+                    LOG_WARN << me() << " - The request finished with error-message: " << status_.error_message();
                 }
-
-                if (state_ != State::READING && state_ != State::CONNECTING) {
-                    LOG_TRACE << me() << " - finishing.";
-                    return done(); // There will be no more events
-                }
-
-                LOG_TRACE << me() << " - finish called, but Waiting for a final read.";
-                state_ = State::FINISHED;
                 break;
 
             default:
@@ -307,17 +290,11 @@ public:
 
         std::string me() const {
             return boost::typeindex::type_id_runtime(*this).pretty_name()
-                                    + " #" + std::to_string(client_id_);
-        }
-
-        void done() override {
-            LOG_TRACE << me() << " - I am in done()!";
-            RequestBase::done();
+                   + " #" + std::to_string(client_id_);
         }
 
     private:
         // We need quite a few variables to perform our single RPC call.
-        State state_ = State::CREATED;
 
         Handle connect_handle   {*this, Handle::Operation::CONNECT};
         Handle read_handle      {*this, Handle::Operation::READ};
@@ -398,7 +375,7 @@ public:
             } // switch
         } // event-loop
 
-        LOG_TRACE << "exiting event-loop: handles_in_flight_=" << handles_in_flight_;
+        LOG_DEBUG << "exiting event-loop: handles_in_flight_=" << handles_in_flight_;
         close();
     }
 
