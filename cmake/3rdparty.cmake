@@ -19,4 +19,3 @@ ExternalProject_Add(logfault
         -DCMAKE_GENERATOR='${CMAKE_GENERATOR}'
         -DCMAKE_BUILD_TYPE='${CMAKE_BUILD_TYPE}'
 )
-

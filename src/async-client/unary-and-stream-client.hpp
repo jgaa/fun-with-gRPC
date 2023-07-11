@@ -8,11 +8,11 @@
 #include <boost/type_index/runtime_cast/register_runtime_class.hpp>
 
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/alarm.h>
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
 #include "Config.h"
-
 
 class UnaryAndSingleStreamClient {
 public:
@@ -50,16 +50,47 @@ public:
             }
 
             void proceed(bool ok) {
-                return instance_.proceed(ok, op_);
+                if (instance_.parent_.config_.do_push_back_on_queue) {
+                    if (!pushed_back_) {
+                        // Work-around to push the event to the end of the queue.
+                        // By default the "queue" works like a stack, which is not what most
+                        // devs excpect or want.
+                        // Ref: https://www.gresearch.com/blog/article/lessons-learnt-from-writing-asynchronous-streaming-grpc-services-in-c/
+                        alarm_.Set(&instance_.parent_.cq_, gpr_now(gpr_clock_type::GPR_CLOCK_REALTIME), tag());
+                        pushed_back_ = true;
+                        pushed_ok_ = ok;
+                        LOG_TRACE << "Handle::proceed() - pushed the " << op_
+                                  << " operation to the end of the queue.";
+                        return;
+                    }
+
+                    // Now we are ready for the next operation on this tag.
+                    pushed_back_ = false;
+
+                    // We don't handle the situation where the alarm-event returned an error.
+                    assert(ok);
+                    ok = pushed_ok_;
+                }
+
+
+                LOG_TRACE << "Handle::proceed() - executing the delayed " << op_
+                          << " operation. handles_in_flight_=" << instance_.parent_.handles_in_flight_;;
+
+                instance_.proceed(ok, op_);
             }
 
         private:
             RequestBase& instance_;
             const Operation op_;
+            bool pushed_back_ = false;
+            bool pushed_ok_ = false;
+            ::grpc::Alarm alarm_;
         };
 
         RequestBase(UnaryAndSingleStreamClient& parent)
-            : parent_{parent} {}
+            : parent_{parent}, client_id_{++parent.next_client_id_} {
+            LOG_TRACE << "Constructed request #" << client_id_ << " at address" << this;
+        }
 
         virtual ~RequestBase() = default;
 
@@ -67,9 +98,10 @@ public:
         virtual void proceed(bool ok, Handle::Operation op) = 0;
 
 
-        void done() {
+        virtual void done() {
             // Ugly, ugly, ugly
-            LOG_TRACE << "If the program crash now, it was a bad idea to delete this ;)";
+            LOG_TRACE << "If the program crash now, it was a bad idea to delete this ;)  #"
+                      << client_id_ << " at address" << this;
 
             // Reference-counting of instances of requests in flight
             parent_.decCounter();
@@ -80,6 +112,7 @@ public:
         // The state required for all requests
         UnaryAndSingleStreamClient& parent_;
         ::grpc::ClientContext ctx_;
+        const size_t client_id_;
     };
 
     /*! Implementation for the `GetFeature()` RPC request.
@@ -97,8 +130,8 @@ public:
             // the request is completed.
             // Note that we use our handle's this as tag. We don't really need the
             // handle in this unary call, but the server implementation need's
-            // to iterate over a Handle to deal with the other reqest classes.
-            rpc_->Finish(&reply_, &status_, handle.tag());
+            // to iterate over a Handle to deal with the other request classes.
+            rpc_->Finish(&reply_, &status_, handle_.tag());
 
             // Reference-counting of instances of requests in flight
             parent.incCounter();
@@ -127,14 +160,13 @@ public:
         }
 
     private:
-        Handle handle{*this, Handle::Operation::CONNECT};
+        Handle handle_{*this, Handle::Operation::CONNECT};
 
         // We need quite a few variables to perform our single RPC call.
         ::routeguide::Point req_;
         ::routeguide::Feature reply_;
         ::grpc::Status status_;
         std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::routeguide::Feature>> rpc_;
-        ::grpc::ClientContext ctx_;
     };
 
 
@@ -146,6 +178,7 @@ public:
             CREATED,
             CONNECTING,
             READING,
+            READ_FAILED,
             FINISHED
         };
 
@@ -167,10 +200,8 @@ public:
             // done or failed. This is where we get the server's status when deal with
             // streams.
             // Note that if we have registered a read-operation,
-            // Finish will be called first. Then the read-operation
-            // will be called with ok == false;
-            // This means that we canot call done() when we get a finish-event,
-            // if we are waiting for a read to complete.
+            // both the read and the finish will be called - but apparently in random order.
+            // Therefore, we cannot call done() until we have observed both the finish and the read event.
             rpc_->Finish(&status_, finish_handle.tag());
 
             // Reference-counting of instances of requests in flight
@@ -183,15 +214,20 @@ public:
         // 2) The operation
         // 3) The ok boolean value.
         void proceed(bool ok, Handle::Operation op) override {
+
+            LOG_TRACE << me() << " - proceed(): state="
+                      << static_cast<int>(state_) << ", ok=" << ok << ", op=" << op;
+
             switch(op) {
+
             case Handle::Operation::CONNECT:
                 if (!ok) [[unlikely]] {
-                    LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
+                    LOG_WARN << me()
                              << " - The request failed. Status: " << status_.error_message();
                     return done();
                 }
 
-                LOG_TRACE << boost::typeindex::type_id_runtime(*this).pretty_name()
+                LOG_TRACE << me()
                           << " - a new request is in progress.";
 
                 // Now, register a read operation.
@@ -202,14 +238,15 @@ public:
             case Handle::Operation::READ:
                 if (!ok) [[unlikely]] {
                     if (state_ == State::FINISHED) {
-                        LOG_TRACE << boost::typeindex::type_id_runtime(*this).pretty_name()
-                                  << " - I got the failed READ I was waiting for. I'm done now. Promise...";
+                        LOG_TRACE << me() << " - I got the failed READ I was waiting for. I'm done now. Promise...";
                         return done();
                     }
 
-                    LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
-                             << " - Failed to read a message. Status: " << status_.error_message();
-                    //return done();
+                    LOG_TRACE << me() << " - Failed to read a message. Status: " << status_.error_message();
+
+                    state_ = State::READ_FAILED;
+                    // What do we do now? Can this ever even happen?
+                    return;
                 }
 
                 // This is where we have an actual message from the server.
@@ -218,8 +255,7 @@ public:
                 // in a co-routine waiting for the next request
 
                 // In our case, let's just log it.
-                LOG_TRACE << boost::typeindex::type_id_runtime(*this).pretty_name()
-                          << " - Request successful. Message: " << reply_.name();
+                LOG_TRACE << me() << " - Request successful. Message: " << reply_.name();
 
 
                 // Prepare the reply-object to be re-used.
@@ -230,39 +266,47 @@ public:
                 rpc_->Read(&reply_, read_handle.tag());
                 break;
 
-            case Handle::Operation::FINISH:                
+            case Handle::Operation::FINISH:
+                LOG_TRACE << me() << " - entering FINISH OP";
                 if (!ok) [[unlikely]] {
-                    LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
-                             << " - Failed to FINISH! Status: " << status_.error_message();
+                    LOG_WARN << me() << " - Failed to FINISH! Status: " << status_.error_message();
                     return done();
                 }
 
                 if (!status_.ok()) {
-                    LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
-                         << " - The request finished with error-message: " << status_.error_message();
+                    LOG_WARN << me() << " - The request finished with error-message: " << status_.error_message();
+                } else {
+                    LOG_TRACE << me() << " - Initiating a new request";
+                    parent_.nextRequest();
                 }
 
-                LOG_TRACE << boost::typeindex::type_id_runtime(*this).pretty_name()
-                          << " - finishing.";
-
-                // Initiate a new request
-                parent_.nextRequest();
-
                 if (state_ != State::READING) {
+                    LOG_TRACE << me() << " - finishing.";
                     return done(); // There will be no more events
                 }
 
+                LOG_TRACE << me() << " - finish called, but Waiting for a final read.";
                 state_ = State::FINISHED;
                 break;
 
             default:
-                LOG_ERROR << boost::typeindex::type_id_runtime(*this).pretty_name()
+                LOG_ERROR << me()
                           << " - Unexpected operation in state-machine: "
                           << static_cast<int>(op);
 
                 assert(false);
 
             } // state
+        }
+
+        std::string me() const {
+            return boost::typeindex::type_id_runtime(*this).pretty_name()
+                                    + " #" + std::to_string(client_id_);
+        }
+
+        void done() override {
+            LOG_TRACE << me() << " - I am in done()!";
+            RequestBase::done();
         }
 
     private:
@@ -277,7 +321,6 @@ public:
         ::routeguide::Feature reply_;
         ::grpc::Status status_;
         std::unique_ptr< ::grpc::ClientAsyncReader< ::routeguide::Feature>> rpc_;
-        ::grpc::ClientContext ctx_;
     };
 
     UnaryAndSingleStreamClient(const Config& config)
@@ -343,11 +386,13 @@ public:
                 break;
 
             case grpc::CompletionQueue::NextStatus::SHUTDOWN:
-                LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
+                LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s).";
+                LOG_TRACE << "SHUTDOWN handles_in_flight_=" << handles_in_flight_;
                 return;
             } // switch
         } // event-loop
 
+        LOG_TRACE << "exiting event-loop: handles_in_flight_=" << handles_in_flight_;
         close();
     }
 
@@ -403,8 +448,10 @@ private:
     // An instance of the client that was generated from our .proto file.
     std::unique_ptr<::routeguide::RouteGuide::Stub> stub_;
 
-    std::atomic_size_t pending_requests_{0};
-    std::atomic_size_t request_count{0};
+    size_t pending_requests_{0};
+    size_t request_count{0};
+    size_t handles_in_flight_{0};
     const Config config_;
     std::once_flag shutdown_;
+    size_t next_client_id_ = 0;
 };

@@ -126,6 +126,9 @@ int main(int argc, char* argv[]) {
         ("stream-messages,s",
          po::value(&config.stream_messages)->default_value(config.stream_messages),
          "Number of messages to send in a stream (for requests with an outgoing stream).")
+        ("queue-work-around,q",
+         po::value(&config.do_push_back_on_queue)->default_value(config.do_push_back_on_queue),
+         "Work-around to put all async operations at the end of the qork-queue.")
         ;
 
     po::options_description cmdline_options;
