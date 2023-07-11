@@ -20,7 +20,7 @@ public:
     /*! Base class for requests
      *
      *  In order to use `this` as a tag and avoid any special processing in the
-     *  event-loop, the simplest approacch in C++ is to let the request implementations
+     *  event-loop, the simplest approach in C++ is to let the request implementations
      *  inherit form a base-class that contains the shared code they all need, and
      *  a pure virtual method for the state-machine.
      */
@@ -112,7 +112,14 @@ public:
         // The state-machine
         virtual void proceed(bool ok, Handle::Operation op) = 0;
 
+    protected:
+        // The state required for all requests
+        UnaryAndSingleStreamClient& parent_;
+        int ref_cnt_ = 0;
+        ::grpc::ClientContext ctx_;
+        const size_t client_id_;
 
+    private:
         void done() {
             // Ugly, ugly, ugly
             LOG_TRACE << "If the program crash now, it was a bad idea to delete this ;)  #"
@@ -122,13 +129,6 @@ public:
             parent_.decCounter();
             delete this;
         }
-
-    protected:
-        // The state required for all requests
-        UnaryAndSingleStreamClient& parent_;
-        int ref_cnt_ = 0;
-        ::grpc::ClientContext ctx_;
-        const size_t client_id_;
     };
 
     /*! Implementation for the `GetFeature()` RPC request.
@@ -159,7 +159,6 @@ public:
                          << " - The request failed. Status: " << status_.error_message();
                 return;
             }
-
 
             if (status_.ok()) {
                 LOG_TRACE << boost::typeindex::type_id_runtime(*this).pretty_name()
@@ -206,9 +205,6 @@ public:
             // Also register a Finish handler, so we know when we are
             // done or failed. This is where we get the server's status when deal with
             // streams.
-            // Note that if we have registered a read-operation,
-            // both the read and the finish will be called - but apparently in random order.
-            // Therefore, we cannot call done() until we have observed both the finish and the read event.
             rpc_->Finish(&status_, finish_handle.tag());
 
             // Reference-counting of instances of requests in flight
@@ -242,7 +238,7 @@ public:
 
             case Handle::Operation::READ:
                 if (!ok) [[unlikely]] {
-                    LOG_TRACE << me() << " - Failed to read a message. Status: " << status_.error_message();
+                    LOG_TRACE << me() << " - Failed to read a message.";
                     return;
                 }
 
@@ -375,7 +371,8 @@ public:
             } // switch
         } // event-loop
 
-        LOG_DEBUG << "exiting event-loop: handles_in_flight_=" << handles_in_flight_;
+        LOG_DEBUG << "exiting event-loop";
+        assert(handles_in_flight_ == 0);
         close();
     }
 
