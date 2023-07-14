@@ -4,6 +4,8 @@ add_executable(${PROJECT_NAME}
     ${PROJECT_NAME}.cpp
     simple-req-res.hpp
     unary-and-streams.hpp
+    bidirectional-stream.hpp
+    ${FUN_ROOT}/include/funwithgrpc/BaseRequest.hpp
 )
 
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 20)

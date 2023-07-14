@@ -12,7 +12,7 @@
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
-#include "Config.h"
+#include "funwithgrpc/Config.h"
 
 class UnaryAndSingleStreamClient {
 public:
@@ -39,6 +39,7 @@ public:
                 CONNECT,
                 READ,
                 WRITE,
+                WRITE_DONE,
                 FINISH
             };
 
@@ -302,15 +303,158 @@ public:
         std::unique_ptr< ::grpc::ClientAsyncReader< ::routeguide::Feature>> rpc_;
     };
 
+    /*! Implementation for the `RecordRoute()` RPC request.
+     */
+    class RecordRouteRequest : public RequestBase {
+    public:
+        // Now we are implementing an actual, trivial state-machine, as
+        // we will send a fixed number of messages.
+
+        RecordRouteRequest(UnaryAndSingleStreamClient& parent)
+            : RequestBase(parent) {
+
+            // Initiate the async request.
+            // Note that this time, we have to supply the tag to the gRPC initiation method.
+            // That's because we will get an event that the request is in progress
+            // before we should (can?) start reading the replies.
+            rpc_ = parent_.stub_->AsyncRecordRoute(&ctx_, &reply_, &parent_.cq_, connect_handle.tag());
+            assert(rpc_);
+
+            // Initiate a `Finish()` operation so we get the reply-message and a status from the server.
+            rpc_->Finish(&status_, finish_handle.tag());
+
+            // Reference-counting of instances of requests in flight
+            parent.incCounter();
+        }
+
+        // As promised, the state-machine get's more complex when we have
+        // streams. In this case, we have three states to deal with on each invocation:
+        // 1) The state of the instance - how many async operations have we started?
+        //    This is handled by reference-counting, so we don't have to deal with it in
+        //    the loop. This greatly reduce the code below.
+        // 2) The operation
+        // 3) The ok boolean value.
+        void proceed(bool ok, Handle::Operation op) override {
+
+            LOG_TRACE << me() << " - proceed(): ok=" << ok << ", op=" << op;
+
+            switch(op) {
+
+            case Handle::Operation::CONNECT:
+                if (!ok) [[unlikely]] {
+                    LOG_WARN << me() << " - The request failed.";
+                    break;
+                }
+
+                LOG_TRACE << me() << " - a new request is in progress.";
+
+                // We are ready to send the first message to the server.
+                // If this was a framework, this is where we would have called
+                // `onRecordRouteReadyToSendFirst()` or or unblocked the next statement
+                // in a co-routine waiting for the next state
+                req_.set_latitude(50);
+                req_.set_longitude(sent_messages_);
+                rpc_->Write(req_, write_handle.tag());
+                break;
+
+            case Handle::Operation::WRITE:
+                if (!ok) [[unlikely]] {
+                    LOG_TRACE << me() << " - Failed to write a message.";
+                    break;
+                }
+
+                // In our case, let's just log it.
+                LOG_TRACE << me() << " - Write was successful.";
+
+                if (++sent_messages_ >= parent_.config_.num_stream_messages) {
+                    LOG_TRACE << me() << " - We are done sending messages.";
+                    rpc_->WritesDone(write_done_handle.tag());
+
+                    // Now we have two pending requests, write done and finish.
+                    break;
+                }
+
+                // This is where we have sent an actual message to the server.
+                // If this was a framework, this is where we would have called
+                // `onRecordRouteReadyToSendNext()` or or unblocked the next statement
+                // in a co-routine waiting for the next state
+
+                // Prepare the message-object to be re-used.
+                // This is usually cheaper than creating a new one for each read operation.
+                req_.Clear();
+                req_.set_latitude(100);
+                req_.set_longitude(sent_messages_);
+
+                // Now, lets register another read operation
+                rpc_->Write(req_, write_handle.tag());
+                break;
+
+            case Handle::Operation::WRITE_DONE:
+                LOG_TRACE << me() << " - entering WRITE_DONE OP";
+                if (!ok) [[unlikely]] {
+                    LOG_WARN << me() << " - Failed to notify the server that we are done.";
+                }
+                break;
+
+            case Handle::Operation::FINISH:
+                LOG_TRACE << me() << " - entering FINISH OP";
+                if (!ok) [[unlikely]] {
+                    LOG_WARN << me() << " - Failed to FINISH! Status: " << status_.error_message();
+                    break;
+                }
+
+                // This is where we have sent all the message to the server.
+                // If this was a framework, this is where we would have called
+                // `onRecordRouteGotReply()` or or unblocked the next statement
+                // in a co-routine waiting for the next state
+
+                if (status_.ok()) {
+                    LOG_TRACE << me() << " - Initiating a new request";
+                    parent_.nextRequest();
+                } else {
+                    LOG_WARN << me() << " - The request finished with error-message: " << status_.error_message();
+                }
+                break;
+
+            default:
+                LOG_ERROR << me()
+                          << " - Unexpected operation in state-machine: "
+                          << static_cast<int>(op);
+
+                assert(false);
+
+            } // state
+        }
+
+        std::string me() const {
+            return boost::typeindex::type_id_runtime(*this).pretty_name()
+                   + " #" + std::to_string(client_id_);
+        }
+
+    private:
+        // We need quite a few variables to perform our single RPC call.
+        size_t sent_messages_ = 0;
+
+        Handle connect_handle   {*this, Handle::Operation::CONNECT};
+        Handle write_handle     {*this, Handle::Operation::WRITE};
+        Handle write_done_handle{*this, Handle::Operation::WRITE_DONE};
+        Handle finish_handle    {*this, Handle::Operation::FINISH};
+
+        ::routeguide::Point req_;
+        ::routeguide::RouteSummary reply_;
+        ::grpc::Status status_;
+        std::unique_ptr< ::grpc::ClientAsyncWriter< ::routeguide::Point>> rpc_;
+    };
+    
     UnaryAndSingleStreamClient(const Config& config)
         : config_{config} {}
 
     // Run the event-loop.
     // Returns when there are no more requests to send
-    void run(const std::string& serverAddress) {
+    void run() {
 
-        LOG_INFO << "Connecting to gRPC service at: " << serverAddress;
-        channel_ = grpc::CreateChannel(serverAddress, grpc::InsecureChannelCredentials());
+        LOG_INFO << "Connecting to gRPC service at: " << config_.address;
+        channel_ = grpc::CreateChannel(config_.address, grpc::InsecureChannelCredentials());
 
         // Is it a "lame channel"?
         // In stead of returning an empty object if something went wrong,
@@ -385,9 +529,10 @@ public:
     }
 
     void nextRequest() {
-        static const std::array<std::function<void()>, 2> request_variants = {
+        static const std::array<std::function<void()>, 3> request_variants = {
             [this]{createRequest<GetFeatureRequest>();},
-            [this]{createRequest<ListFeaturesRequest>();}
+            [this]{createRequest<ListFeaturesRequest>();},
+            [this]{createRequest<RecordRouteRequest>();}
         };
 
         request_variants.at(config_.request_type)();

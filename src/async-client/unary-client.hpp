@@ -2,7 +2,7 @@
 
 #include <grpcpp/grpcpp.h>
 
-#include "Config.h"
+#include "funwithgrpc/Config.h"
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
@@ -67,16 +67,16 @@ public:
         std::unique_ptr< ::grpc::ClientAsyncResponseReader< ::routeguide::Feature>> rpc_;
         ::grpc::ClientContext ctx_;
     };
-
+    
     SimpleReqResClient(const Config& config)
         : config_{config} {}
 
     // Run the event-loop.
     // Returns when there are no more requests to send
-    void run(const std::string& serverAddress) {
+    void run() {
 
-        LOG_INFO << "Connecting to gRPC service at: " << serverAddress;
-        channel_ = grpc::CreateChannel(serverAddress, grpc::InsecureChannelCredentials());
+        LOG_INFO << "Connecting to gRPC service at: " << config_.address;
+        channel_ = grpc::CreateChannel(config_.address, grpc::InsecureChannelCredentials());
 
         // Is it a "lame channel"?
         // In stead of returning an empty object if something went wrong,
@@ -178,7 +178,7 @@ private:
 
     // An instance of the client that was generated from our .proto file.
     std::unique_ptr<::routeguide::RouteGuide::Stub> stub_;
-
+    
     const Config& config_;
     std::atomic_size_t pending_requests_{0};
     std::atomic_size_t request_count{0};

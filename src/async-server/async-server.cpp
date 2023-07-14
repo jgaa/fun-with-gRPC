@@ -21,14 +21,14 @@
 
 #include "simple-req-res.hpp"
 #include "unary-and-streams.hpp"
-#include "test-config.h"
+#include "bidirectional-stream.hpp"
+#include "funwithgrpc/Config.h"
 
 using namespace std;
 
 namespace {
 
 // The gRPC address we will use
-std::string address = "127.0.0.1:10123";
 std::string server_type = "first";
 
 Config config;
@@ -73,7 +73,10 @@ void runSvc() {
     bool done = false;
 
     T svc{config};
-    svc.run(address);
+
+    thread{[&svc] {
+        svc.run();
+    }}.detach();
 
     handleSignals(signals, done, svc);
 
@@ -87,6 +90,8 @@ void process() {
         runSvc<SimpleReqRespSvc>();
     } else if (server_type == "second") {
         runSvc<UnaryAndSingleStreamSvc>();
+    } else if (server_type == "third") {
+        runSvc<EverythingSvr>();
     } else {
         throw runtime_error{"Unknows server: "s + server_type};
     }
@@ -109,7 +114,7 @@ int main(int argc, char* argv[]) {
     general.add_options()
         ("help,h", "Print help and exit")
         ("address,a",
-         po::value(&address)->default_value(address),
+         po::value(&config.address)->default_value(config.address),
          "Network address to use for gRPC.")
         ("server,s",
          po::value(&server_type)->default_value(server_type),
@@ -120,7 +125,7 @@ int main(int argc, char* argv[]) {
          po::value(&log_level_console)->default_value(log_level_console),
          "Log-level to the console; one of 'info', 'debug', 'trace'. Empty string to disable.")
         ("num-stream-messages",
-         po::value(&config.num_stream_messages_)->default_value(config.num_stream_messages_),
+         po::value(&config.num_stream_messages)->default_value(config.num_stream_messages),
          "Number of messages to send in a reply-stream.")
         ;
 

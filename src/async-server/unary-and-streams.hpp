@@ -10,7 +10,7 @@
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
-#include "test-config.h"
+#include "funwithgrpc/Config.h"
 
 /*!
  * \brief The UnaryAndSingleStreamSvc class
@@ -207,7 +207,7 @@ public:
                     LOG_WARN << "The reply-operation failed.";
                 }
 
-                if (++replies_ > parent_.config_.num_stream_messages_) {
+                if (++replies_ > parent_.config_.num_stream_messages) {
                     // We have reached the desired number of replies
                     state_ = State::FINISHING;
 
@@ -262,12 +262,131 @@ public:
         size_t replies_ = 0;
     };
 
+
+    /*! Implementation for the `ListFeatures()` RPC call.
+     *
+     *  This is a bit more advanced. We receive a normal request message,
+     *  but the reply is a stream of messges.
+     */
+    class RecordRouteRequest : public RequestBase {
+    public:
+        enum class State {
+            CREATED,
+            READING,
+            FINISHING,
+            DONE
+        };
+
+        RecordRouteRequest(UnaryAndSingleStreamSvc& parent,
+                            ::routeguide::RouteGuide::AsyncService& service,
+                            ::grpc::ServerCompletionQueue& cq)
+            : RequestBase(parent, service, cq) {
+
+            // Register this instance with the event-queue and the service.
+            // The first event received over the queue is that we have a request.
+            service_.RequestRecordRoute(&ctx_, &reader_, &cq_, &cq_, this);
+        }
+
+        // State-machine to deal with a single request
+        // This works almost like a co-routine, where we work our way down for each
+        // time we are called. The State_ could just as well have been an integer/counter;
+        void proceed(bool ok) override {
+            switch(state_) {
+            case State::CREATED:
+                if (!ok) [[unlikely]] {
+                    // The operation failed.
+                    // Let's end it here.
+                    LOG_WARN << "The request-operation failed. Assuming we are shutting down";
+                    return done();
+                }
+
+                // Before we do anything else, we must create a new instance
+                // so the service can handle a new request from a client.
+                createNew<RecordRouteRequest>(parent_, service_, cq_);
+
+                // Initiate the first read operation
+                reader_.Read(&req_, this);
+                state_ = State::READING;
+                break;
+
+            case State::READING:
+                if (!ok) [[unlikely]] {
+                    // The operation failed.
+                    // This is normal on an incoming stream, when there are no more messages.
+                    // As far as I know, there is no way at this point to deduce if the false status is
+                    // because the client is done sending messages, or because we encountered
+                    // an error.
+                    LOG_TRACE << "The read-operation failed. It's probably not an error :)";
+
+                    // Initiate the finish operation
+
+                    // This is where we have received the request, with all it's parts,
+                    // and may formulate another answer.
+                    // If this was code for a framework, this is where we would have called
+                    // the `onRpcRequestRecordRouteDone()` method, or unblocked the next statement
+                    // in a co-routine awaiting the next state-change.
+                    //
+                    // In our case, let's just return something.
+
+                    reply_.set_distance(100);
+                    reply_.set_distance(300);
+                    reader_.Finish(reply_, ::grpc::Status::OK, this);
+                    state_ = State::FINISHING;
+                    break;
+                }
+
+                // This is where we have read a message from the request.
+                // If this was code for a framework, this is where we would have called
+                // the `onRpcRequestRecordRouteGotMessage()` method, or unblocked the next statement
+                // in a co-routine awaiting the next state-change.
+                //
+                // In our case, let's just log it.
+                LOG_TRACE << "Got message: longitude=" << req_.longitude()
+                          << ", latitude=" << req_.latitude();
+
+                // Prepare the reply-object to be re-used.
+                // This is usually cheaper than creating a new one for each write operation.
+
+                // *Write* will relay the event that the write is completed on the queue, using *this* as tag.
+                // Initiate the first read operation
+
+                // Reset the req_ message. This is cheaper than allocating a new one for each read.
+                req_.Clear();
+                reader_.Read(&req_, this);
+
+                // Now, we wait for the read to complete
+                break;
+
+            case State::FINISHING:
+                if (!ok) [[unlikely]] {
+                    // The operation failed.
+                    LOG_WARN << "The finish-operation failed.";
+                }
+
+                state_ = State::DONE; // Not required, but may be useful if we investigate a crash.
+
+                // We are done. There will be no further events for this instance.
+                return done();
+
+            default:
+                LOG_ERROR << "Logic error / unexpected state in proceed()!";
+            } // switch
+        }
+
+    private:
+        ::routeguide::Point req_;
+        ::routeguide::RouteSummary reply_;
+        ::grpc::ServerAsyncReader< ::routeguide::RouteSummary, ::routeguide::Point> reader_{&ctx_};
+        State state_ = State::CREATED;
+    };
+
+
     UnaryAndSingleStreamSvc(const Config& config)
         : config_{config} {}
 
-    void init(const std::string& serverAddress) {
+    void init() {
         grpc::ServerBuilder builder;
-        builder.AddListeningPort(serverAddress, grpc::InsecureServerCredentials());
+        builder.AddListeningPort(config_.address, grpc::InsecureServerCredentials());
         builder.RegisterService(&service_);
         cq_ = builder.AddCompletionQueue();
         // Finally assemble the server.
@@ -278,61 +397,57 @@ public:
             << boost::typeindex::type_id_runtime(*this).pretty_name()
 
             // The useful information
-            << " listening on " << serverAddress;
+            << " listening on " << config_.address;
     }
 
-    // Start the event-loop in another thread.
-    // Returns immediately
-    void run(const std::string& serverAddress) {
-        init(serverAddress);
+    void run() {
+        init();
 
-        // Start the worker-thread. Returns immediately.
-        worker_.emplace([this]() {
-           // This is inside the new thread
+       // Prepare for the first request for each reqest type.
+       createNew<GetFeatureRequest>(*this, service_, *cq_);
+       createNew<ListFeaturesRequest>(*this, service_, *cq_);
+       createNew<RecordRouteRequest>(*this, service_, *cq_);
 
-           // Prepare for the first request for each reqest type.
-           createNew<GetFeatureRequest>(*this, service_, *cq_);
-           createNew<ListFeaturesRequest>(*this, service_, *cq_);
+       // The inner event-loop
+       while(true) {
+           bool ok = true;
+           void *tag = {};
 
-           // The inner event-loop
-           while(true) {
-               bool ok = true;
-               void *tag = {};
+           // FIXME: This is crazy. Figure out how to use stable clock!
+           const auto deadline = std::chrono::system_clock::now()
+                                 + std::chrono::milliseconds(1000);
 
-               // FIXME: This is crazy. Figure out how to use stable clock!
-               const auto deadline = std::chrono::system_clock::now()
-                                     + std::chrono::milliseconds(1000);
+           // Get any IO operation that is ready.
+           const auto status = cq_->AsyncNext(&tag, &ok, deadline);
+           LOG_TRACE << "async-next: ok=" << ok
+                     << ", status=" << status
+                     << ", tag=" << tag;
 
-               // Get any IO operation that is ready.
-               const auto status = cq_->AsyncNext(&tag, &ok, deadline);
+           // So, here we deal with the first of the three states: The status from Next().
+           switch(status) {
+           case grpc::CompletionQueue::NextStatus::TIMEOUT:
+               LOG_DEBUG << "AsyncNext() timed out.";
+               continue;
 
-               // So, here we deal with the first of the three states: The status from Next().
-               switch(status) {
-               case grpc::CompletionQueue::NextStatus::TIMEOUT:
-                   LOG_DEBUG << "AsyncNext() timed out.";
-                   continue;
+           case grpc::CompletionQueue::NextStatus::GOT_EVENT:
+               LOG_DEBUG << "AsyncNext() returned an event. The status is "
+                         << (ok ? "OK" : "FAILED");
 
-               case grpc::CompletionQueue::NextStatus::GOT_EVENT:
-                   LOG_DEBUG << "AsyncNext() returned an event. The status is "
-                             << (ok ? "OK" : "FAILED");
+               // Use a scope to allow a new variable inside a case statement.
+               {
+                   auto request = static_cast<RequestBase *>(tag);
 
-                   // Use a scope to allow a new variable inside a case statement.
-                   {
-                       auto request = static_cast<RequestBase *>(tag);
+                   // Now, let the OneRequest state-machine deal with the event.
+                   // We could have done it here, but that code would smell really nasty.
+                   request->proceed(ok);
+               }
+               break;
 
-                       // Now, let the OneRequest state-machine deal with the event.
-                       // We could have done it here, but that code would smell really nasty.
-                       request->proceed(ok);
-                   }
-                   break;
-
-               case grpc::CompletionQueue::NextStatus::SHUTDOWN:
-                   LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
-                   return;
-               } // switch
-           } // loop
-
-       }).detach(); // We have to detach() the thread, or bad things will happen when the thread exits!
+           case grpc::CompletionQueue::NextStatus::SHUTDOWN:
+               LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
+               return;
+           } // switch
+       } // loop
     }
 
     void stop() {
@@ -351,10 +466,6 @@ private:
 
     // A gRPC server object
     std::unique_ptr<grpc::Server> server_;
-
-    // The worker-thread for our gRPC event-loop
-    // We use std::optional so we can start the thread when we are ready.
-    std::optional<std::thread> worker_;
 
     // Config, so the user can override our default parameters
     const Config config_;

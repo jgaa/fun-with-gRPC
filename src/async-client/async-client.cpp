@@ -21,49 +21,49 @@
 
 #include "unary-client.hpp"
 #include "unary-and-stream-client.hpp"
+#include "bidirectional-stream-client.hpp"
 
-#include "Config.h"
+//#include "Config.h"
 
 using namespace std;
 
 namespace {
 
 // The gRPC address we will use
-std::string address = "127.0.0.1:10123";
 std::string client_type = "first";
 
 Config config;
 
-template <typename T>
-void handleSignals(auto& signals, bool& done, T& client) {
-    signals.async_wait([&](const boost::system::error_code& ec, int signalNumber) {
+//template <typename T>
+//void handleSignals(auto& signals, bool& done, T& client) {
+//    signals.async_wait([&](const boost::system::error_code& ec, int signalNumber) {
 
-        if (ec) {
-            if (ec == boost::asio::error::operation_aborted) {
-                LOG_TRACE << "handleSignals: Handler aborted.";
-                return;
-            }
-            LOG_WARN << "handleSignals - Received error: " << ec.message();
-            return;
-        }
+//        if (ec) {
+//            if (ec == boost::asio::error::operation_aborted) {
+//                LOG_TRACE << "handleSignals: Handler aborted.";
+//                return;
+//            }
+//            LOG_WARN << "handleSignals - Received error: " << ec.message();
+//            return;
+//        }
 
-        LOG_INFO << "handleSignals - Received signal #" << signalNumber;
-        if (signalNumber == SIGHUP) {
-            LOG_WARN << "handleSignals - Ignoring SIGHUP. Note - config is not re-loaded.";
-        } else if (signalNumber == SIGQUIT || signalNumber == SIGINT) {
-            if (!done) {
-                LOG_INFO << "handleSignals - Stopping the client.";
-                client.stop();
-                done = true;
-            }
-            return;
-        } else {
-            LOG_WARN << "handleSignals - Ignoring signal #" << signalNumber;
-        }
+//        LOG_INFO << "handleSignals - Received signal #" << signalNumber;
+//        if (signalNumber == SIGHUP) {
+//            LOG_WARN << "handleSignals - Ignoring SIGHUP. Note - config is not re-loaded.";
+//        } else if (signalNumber == SIGQUIT || signalNumber == SIGINT) {
+//            if (!done) {
+//                LOG_INFO << "handleSignals - Stopping the client.";
+//                client.stop();
+//                done = true;
+//            }
+//            return;
+//        } else {
+//            LOG_WARN << "handleSignals - Ignoring signal #" << signalNumber;
+//        }
 
-        handleSignals(signals, done, client);
-    });
-}
+//        handleSignals(signals, done, client);
+//    });
+//}
 
 template <typename T>
 void runClient() {
@@ -71,14 +71,16 @@ void runClient() {
 
     // Unlike the server, here we use the main-thread to run the event-loop.
     // run() returns when we are finished with the requests.
-    client.run(address);
+    client.run();
 }
 
 void process() {
     if (client_type == "first") {
         runClient<SimpleReqResClient>();
     } else if (client_type == "second") {
-        runClient<UnaryAndSingleStreamClient>();
+        runClient<UnaryAndSingleStreamClient>();  
+    } else if (client_type == "third") {
+        runClient<EverythingClient>();
     } else {
         throw runtime_error{"Unknows client-type: "s + client_type};
     }
@@ -101,7 +103,7 @@ int main(int argc, char* argv[]) {
     general.add_options()
         ("help,h", "Print help and exit")
         ("address,a",
-         po::value(&address)->default_value(address),
+         po::value(&config.address)->default_value(config.address),
          "Network address to use for gRPC.")
         ("client,c",
          po::value(&client_type)->default_value(client_type),
@@ -124,7 +126,7 @@ int main(int argc, char* argv[]) {
          po::value(&config.parallel_requests)->default_value(config.parallel_requests),
          "Number of requests to send in parallel.")
         ("stream-messages,s",
-         po::value(&config.stream_messages)->default_value(config.stream_messages),
+         po::value(&config.num_stream_messages)->default_value(config.num_stream_messages),
          "Number of messages to send in a stream (for requests with an outgoing stream).")
         ("queue-work-around,q",
          po::value(&config.do_push_back_on_queue)->default_value(config.do_push_back_on_queue),

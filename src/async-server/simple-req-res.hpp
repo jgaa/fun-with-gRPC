@@ -10,7 +10,7 @@
 
 #include "route_guide.grpc.pb.h"
 #include "funwithgrpc/logging.h"
-#include "test-config.h"
+#include "funwithgrpc/Config.h"
 
 /*!
  * \brief The SimpleReqRespSvc class
@@ -126,11 +126,12 @@ public:
     };
 
 
-    SimpleReqRespSvc(Config&)  {}
+    SimpleReqRespSvc(Config& config)
+        : config_{config} {}
 
-    void init(const std::string& serverAddress) {
+    void init() {
         grpc::ServerBuilder builder;
-        builder.AddListeningPort(serverAddress, grpc::InsecureServerCredentials());
+        builder.AddListeningPort(config_.address, grpc::InsecureServerCredentials());
         builder.RegisterService(&service_);
         cq_ = builder.AddCompletionQueue();
         // Finally assemble the server.
@@ -141,60 +142,52 @@ public:
             << boost::typeindex::type_id_runtime(*this).pretty_name()
 
             // The useful information
-            << " listening on " << serverAddress;
+            << " listening on " << config_.address;
     }
 
-    // Start the event-loop in another thread.
-    // Returns immediately
-    void run(const std::string& serverAddress) {
-        init(serverAddress);
+    void run() {
+        init();
 
-        // Start the worker-thread. Returns immediately.
-        worker_.emplace([this]() {
-            // This is inside the new thread
+        // Prepare for the first request.
+        OneRequest::createNew(service_, *cq_);
 
-            // Prepare for the first request.
-            OneRequest::createNew(service_, *cq_);
+        // The inner event-loop
+        while(true) {
+            bool ok = true;
+            void *tag = {};
 
-            // The inner event-loop
-            while(true) {
-                bool ok = true;
-                void *tag = {};
+            // FIXME: This is crazy. Figure out how to use stable clock!
+            const auto deadline = std::chrono::system_clock::now()
+                                  + std::chrono::milliseconds(1000);
 
-                // FIXME: This is crazy. Figure out how to use stable clock!
-                const auto deadline = std::chrono::system_clock::now()
-                                      + std::chrono::milliseconds(1000);
+            // Get any IO operation that is ready.
+            const auto status = cq_->AsyncNext(&tag, &ok, deadline);
 
-                // Get any IO operation that is ready.
-                const auto status = cq_->AsyncNext(&tag, &ok, deadline);
+            // So, here we deal with the first of the three states: The status from Next().
+            switch(status) {
+            case grpc::CompletionQueue::NextStatus::TIMEOUT:
+                LOG_DEBUG << "AsyncNext() timed out.";
+                continue;
 
-                // So, here we deal with the first of the three states: The status from Next().
-                switch(status) {
-                case grpc::CompletionQueue::NextStatus::TIMEOUT:
-                    LOG_DEBUG << "AsyncNext() timed out.";
-                    continue;
+            case grpc::CompletionQueue::NextStatus::GOT_EVENT:
+                LOG_DEBUG << "AsyncNext() returned an event. The status is "
+                          << (ok ? "OK" : "FAILED");
 
-                case grpc::CompletionQueue::NextStatus::GOT_EVENT:
-                    LOG_DEBUG << "AsyncNext() returned an event. The status is "
-                              << (ok ? "OK" : "FAILED");
+                // Use a scope to allow a new variable inside a case statement.
+                {
+                    auto request = static_cast<OneRequest *>(tag);
 
-                    // Use a scope to allow a new variable inside a case statement.
-                    {
-                        auto request = static_cast<OneRequest *>(tag);
+                    // Now, let the OneRequest state-machine deal with the event.
+                    // We could have done it here, but that code would smell really nasty.
+                    request->proceed(ok);
+                }
+                break;
 
-                        // Now, let the OneRequest state-machine deal with the event.
-                        // We could have done it here, but that code would smell really nasty.
-                        request->proceed(ok);
-                    }
-                    break;
-
-                case grpc::CompletionQueue::NextStatus::SHUTDOWN:
-                    LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
-                    return;
-                } // switch
-            } // loop
-
-        }).detach(); // We have to detach() the thread, or bad things will happen when the thread exits!
+            case grpc::CompletionQueue::NextStatus::SHUTDOWN:
+                LOG_INFO << "SHUTDOWN. Tearing down the gRPC connection(s) ";
+                return;
+            } // switch
+        } // loop
     }
 
     void stop() {
@@ -214,7 +207,5 @@ private:
     // A gRPC server object
     std::unique_ptr<grpc::Server> server_;
 
-    // The worker-thread for our gRPC event-loop
-    // We use std::optional so we can start the thread when we are ready.
-    std::optional<std::thread> worker_;
+    const Config& config_;
 };
