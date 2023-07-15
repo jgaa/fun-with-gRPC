@@ -34,37 +34,6 @@ std::string client_type = "first";
 
 Config config;
 
-//template <typename T>
-//void handleSignals(auto& signals, bool& done, T& client) {
-//    signals.async_wait([&](const boost::system::error_code& ec, int signalNumber) {
-
-//        if (ec) {
-//            if (ec == boost::asio::error::operation_aborted) {
-//                LOG_TRACE << "handleSignals: Handler aborted.";
-//                return;
-//            }
-//            LOG_WARN << "handleSignals - Received error: " << ec.message();
-//            return;
-//        }
-
-//        LOG_INFO << "handleSignals - Received signal #" << signalNumber;
-//        if (signalNumber == SIGHUP) {
-//            LOG_WARN << "handleSignals - Ignoring SIGHUP. Note - config is not re-loaded.";
-//        } else if (signalNumber == SIGQUIT || signalNumber == SIGINT) {
-//            if (!done) {
-//                LOG_INFO << "handleSignals - Stopping the client.";
-//                client.stop();
-//                done = true;
-//            }
-//            return;
-//        } else {
-//            LOG_WARN << "handleSignals - Ignoring signal #" << signalNumber;
-//        }
-
-//        handleSignals(signals, done, client);
-//    });
-//}
-
 template <typename T>
 void runClient() {
     T client(config);
@@ -115,7 +84,7 @@ int main(int argc, char* argv[]) {
          // Ugly, but valid.
          po::value(reinterpret_cast<int *>(&config.request_type))
              ->default_value(static_cast<int>(config.request_type)),
-         "Reqest to send:\n   0=GetFeature()\n   1=ListFeatures()\n")
+         "Reqest to send:\n   0=GetFeature\n   1=ListFeatures\n   2=RecordRoute\n   3=RouteChat")
         ("log-to-console,C",
          po::value(&log_level_console)->default_value(log_level_console),
          "Log-level to the console; one of 'info', 'debug', 'trace'. Empty string to disable.")

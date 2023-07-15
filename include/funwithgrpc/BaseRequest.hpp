@@ -81,12 +81,25 @@ public:
             Handle(RequestBase& instance)
                 : base_{instance} {}
 
+            std::string_view name(const Operation op) {
+                static constexpr std::array<std::string_view, 6> names = {
+                    "INVALID",
+                    "CONNECT",
+                    "READ",
+                    "WRITE",
+                    "WRITE_DONE",
+                    "FINISH"
+                };
+
+                return names.at(static_cast<size_t>(op));
+            }
+
 
             [[nodiscard]] void *tag(Operation op, proceed_t&& fn) noexcept {
                 assert(op_ == Operation::INVALID);
 
                 LOG_TRACE << "Handle::proceed() - " << base_.client_id_
-                          << " executing " << op_ << " operation.";
+                          << " initiating " << name(op) << " operation.";
                 op_ = op;
                 proceed_ = std::move(fn);
                 return tag_();
@@ -107,7 +120,7 @@ public:
                                    tag_());
                         pushed_back_ = true;
                         pushed_ok_ = ok;
-                        LOG_TRACE << "Handle::proceed() - pushed the " << op_
+                        LOG_TRACE << "Handle::proceed() - pushed the " << name(op_)
                                   << " operation to the end of the queue.";
                         return;
                     }
@@ -126,8 +139,8 @@ public:
                 op_ = Operation::INVALID;
 
                 if (proceed_) {
-                    LOG_TRACE << "Handle - caling proceed() on #"  << base_.client_id_
-                              << " op=" << current_op << ", ok=" << ok;
+                    LOG_TRACE << "Handle - calling proceed() on #"  << base_.client_id_
+                              << " op=" << name(current_op) << ", ok=" << ok;
 
                     // Move `proceed` to the stack.
                     // There is a good probablility that `proceed()` will call `tag()`,
@@ -232,11 +245,11 @@ public:
             // So, here we deal with the first of the three states: The status from Next().
             switch(status) {
             case grpc::CompletionQueue::NextStatus::TIMEOUT:
-                LOG_DEBUG << "AsyncNext() timed out.";
+                LOG_TRACE << "AsyncNext() timed out.";
                 continue;
 
             case grpc::CompletionQueue::NextStatus::GOT_EVENT:
-                LOG_DEBUG << "AsyncNext() returned an event. The status is "
+                LOG_TRACE << "AsyncNext() returned an event. The status is "
                           << (ok ? "OK" : "FAILED");
 
                 // Use a scope to allow a new variable inside a case statement.

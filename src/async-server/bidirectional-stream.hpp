@@ -23,6 +23,9 @@ public:
             owner_.grpc().service_.RequestGetFeature(&ctx_, &req_, &resp_, cq(), cq(),
                 op_handle_.tag(Handle::Operation::CONNECT,
                 [this, &owner](bool ok, Handle::Operation /* op */) {
+
+                LOG_DEBUG << me(*this) << " - Processing a new connect from " << ctx_.peer();
+
                     if (!ok) [[unlikely]] {
                         // The operation failed.
                         // Let's end it here.
@@ -77,6 +80,9 @@ public:
             owner_.grpc().service_.RequestListFeatures(&ctx_, &req_, &resp_, cq(), cq(),
                 op_handle_.tag(Handle::Operation::CONNECT,
                 [this, &owner](bool ok, Handle::Operation /* op */) {
+
+                    LOG_DEBUG << me(*this) << " - Processing a new connect from " << ctx_.peer();
+
                     if (!ok) [[unlikely]] {
                         // The operation failed.
                         // Let's end it here.
@@ -154,6 +160,9 @@ public:
             owner_.grpc().service_.RequestRecordRoute(&ctx_, &io_, cq(), cq(),
                 op_handle_.tag(Handle::Operation::CONNECT,
                     [this, &owner](bool ok, Handle::Operation /* op */) {
+
+                        LOG_DEBUG << me(*this) << " - Processing a new connect from " << ctx_.peer();
+
                         if (!ok) [[unlikely]] {
                             // The operation failed.
                             // Let's end it here.
@@ -240,6 +249,160 @@ public:
         ::grpc::ServerAsyncReader< decltype(reply_), decltype(req_)> io_{&ctx_};
     };
 
+    class RouteChatRequest : public RequestBase {
+    public:
+
+        RouteChatRequest(EverythingSvr& owner)
+            : RequestBase(owner) {
+
+            owner_.grpc().service_.RequestRouteChat(&ctx_, &stream_, cq(), cq(),
+                in_handle_.tag(Handle::Operation::CONNECT,
+                    [this, &owner](bool ok, Handle::Operation /* op */) {
+
+                        LOG_DEBUG << me(*this) << " - Processing a new connect from " << ctx_.peer();
+
+                        if (!ok) [[unlikely]] {
+                            // The operation failed.
+                            // Let's end it here.
+                            LOG_WARN << "The request-operation failed. Assuming we are shutting down";
+                            return;
+                        }
+
+                        // Before we do anything else, we must create a new instance
+                        // so the service can handle a new request from a client.
+                        owner_.createNew<RecordRouteRequest>(owner);
+
+                        /* There arte multiple ways to handle the message-flow in a bidirectional stream.
+                         *
+                         * One party can send the first message, and the other party can respond wil a message,
+                         * until the one or both parties gets bored.
+                         *
+                         * Both parties can wait for some event to occur, and send a message when appropriate.
+                         *
+                         * One party can send occational updates (for example location data) and the other
+                         * party can respond with one or more messages when appropriate.
+                         *
+                         * Both parties can start sending messages as soon as the connection is made.
+                         * That's what we are doing (or at least preparing for) in this example.
+                         */
+
+                        read(true); // Wait for the first incoming message
+                        write(true);  // Initiate the first write operation.
+            }));
+        }
+
+    private:
+        void read(const bool first) {
+            if (!first) {
+                // This is where we have read a message from the stream.
+                // If this was code for a framework, this is where we would have called
+                // the `onRpcRequestRouteChatGotMessage()` method, or unblocked the next statement
+                // in a co-routine awaiting the next state-change.
+                //
+                // In our case, let's just log it.
+
+                LOG_TRACE << "Incoming message: " << req_.message();
+
+                req_.Clear();
+            }
+
+            // Start new read
+            // Cute! the Read operation takes a pointer
+            stream_.Read(&req_, in_handle_.tag(
+                Handle::Operation::READ,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                    // The operation failed.
+                    // This is normal on an incoming stream, when there are no more messages.
+                    // As far as I know, there is no way at this point to deduce if the false status is
+                    // because the client is done sending messages, or because we encountered
+                    // an error.
+                    LOG_TRACE << "The read-operation failed. It's probably not an error :)";
+
+                    done_reading_ = true;
+                    return finishIfDone();
+                    }
+
+                    read(false);
+            }));
+        }
+
+        void write(const bool first) {
+            if (!first) {
+                reply_.Clear();
+            }
+
+            if (++replies_ > owner_.config().num_stream_messages) {
+                done_writing_ = true;
+
+                LOG_TRACE << me(*this) << " - We are done writing to the stream.";
+                return finishIfDone();
+            }
+
+            // Start new write
+            reply_.set_message(std::string{"Server Message #"} + std::to_string(replies_));
+
+            // ... and the write-operation takes a reference.
+            stream_.Write(reply_, out_handle_.tag(
+                                Handle::Operation::WRITE,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                        // The operation failed.
+                        // This is normal on an incoming stream, when there are no more messages.
+                        // As far as I know, there is no way at this point to deduce if the false status is
+                        // because the client is done sending messages, or because we encountered
+                        // an error.
+                        LOG_TRACE << "The write-operation failed.";
+
+                        done_writing_ = true;
+                        return finishIfDone();
+                    }
+
+                    write(false);
+                }));
+        }
+
+        // We wait until all incoming messages are received and all outgoing messages are sent
+        // before we send the finish message.
+        void finishIfDone() {
+            if (!sent_finish_ && done_reading_ && done_writing_) {
+                LOG_TRACE << me(*this) << " - We are done reading and writing. Sending finish!";
+
+                stream_.Finish(grpc::Status::OK, out_handle_.tag(
+                    Handle::Operation::FINISH,
+                    [this](bool ok, Handle::Operation /* op */) {
+
+                        if (!ok) [[unlikely]] {
+                            LOG_WARN << "The finish-operation failed.";
+                        }
+
+                        LOG_TRACE << me(*this) << " - We are done";
+                }));
+                sent_finish_ = true;
+                return;
+            }
+        }
+
+        bool done_reading_ = false;
+        bool done_writing_ = false;
+        bool sent_finish_ = false;
+        size_t replies_ = 0;
+
+        // We are streaming messages in and out simultaneously, so we need two handles.
+        // One for each direction.
+        Handle in_handle_{*this};
+        Handle out_handle_{*this};
+
+        ::grpc::ServerContext ctx_;
+        ::routeguide::RouteNote req_;
+        ::routeguide::RouteNote reply_;
+
+        // Interesingly, the template the class is named `*ReaderWriter`, while
+        // the template argument order is first Writer type and then Reader type.
+        // Lot's of room for false assumptions and subtle errors here ;)
+        ::grpc::ServerAsyncReaderWriter< decltype(reply_), decltype(req_)> stream_{&ctx_};
+    };
+
     EverythingSvr(const Config& config)
         : EventLoopBase(config) {
 
@@ -262,5 +425,6 @@ public:
         createNew<GetFeatureRequest>(*this);
         createNew<ListFeaturesRequest>(*this);
         createNew<RecordRouteRequest>(*this);
+        createNew<RouteChatRequest>(*this);
     }
 };

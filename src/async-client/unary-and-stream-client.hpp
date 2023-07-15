@@ -491,7 +491,7 @@ public:
             // So, here we deal with the first of the three states: The status of Next().
             switch(status) {
             case grpc::CompletionQueue::NextStatus::TIMEOUT:
-                LOG_DEBUG << "AsyncNext() timed out.";
+                LOG_TRACE << "AsyncNext() timed out.";
                 continue;
 
             case grpc::CompletionQueue::NextStatus::GOT_EVENT:

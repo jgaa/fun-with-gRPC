@@ -29,6 +29,8 @@ public:
         GetFeatureRequest(EverythingClient& owner)
             : RequestBase(owner) {
 
+            LOG_DEBUG << me(*this) << " - Connecting...";
+
             // Initiate the async request.
             rpc_ = owner.grpc().stub_->AsyncGetFeature(&ctx_, req_, cq());
             assert(rpc_);
@@ -74,6 +76,8 @@ public:
 
         ListFeaturesRequest(EverythingClient& owner)
             : RequestBase(owner) {
+
+            LOG_DEBUG << me(*this) << " - Connecting...";
 
             // Initiate the async request.
             rpc_ = owner.grpc().stub_->AsyncListFeatures(&ctx_, req_, cq(), op_handle_.tag(
@@ -146,6 +150,224 @@ public:
         std::unique_ptr< ::grpc::ClientAsyncReader< decltype(reply_)>> rpc_;
     }; // ListFeaturesRequest
 
+
+    class RecordRouteRequest : public RequestBase {
+    public:
+
+        RecordRouteRequest(EverythingClient& owner)
+            : RequestBase(owner) {
+
+            LOG_DEBUG << me(*this) << " - Connecting...";
+
+            // Initiate the async request (connect).
+            rpc_ = owner.grpc().stub_->AsyncRecordRoute(&ctx_, &reply_, cq(), io_handle_.tag(
+                Handle::Operation::CONNECT,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                        LOG_WARN << me(*this) << " - The request failed (connect).";
+                        return;
+                    }
+
+                    // The server will not send anything until we are done writing.
+                    // So let's get started.
+
+                    write(true);
+               }));
+
+            // Register a handler to be called when the server has sent a reply and final status.
+            assert(rpc_);
+            rpc_->Finish(&status_, finish_handle_.tag(
+                Handle::Operation::FINISH,
+                [this](bool ok, Handle::Operation /* op */) mutable {
+                    if (!ok) [[unlikely]] {
+                        LOG_WARN << me(*this) << " - The request failed (connect).";
+                        return;
+                    }
+
+                    if (status_.ok()) {
+                        LOG_TRACE << me(*this) << " - Initiating a new request";
+                        static_cast<EverythingClient&>(owner_).createNext<RouteChatRequest>();
+                    } else {
+                        LOG_WARN << me(*this) << " - The request finished with error-message: "
+                                 << status_.error_message();
+                    }
+               }));
+        }
+
+    private:
+        void write(const bool first) {
+
+            if (!first) {
+                req_.Clear();
+            }
+
+            if (++sent_messages_ > owner_.config().num_stream_messages) {
+
+                LOG_TRACE << me(*this) << " - We are done writing to the stream.";
+
+                rpc_->WritesDone(io_handle_.tag(
+                    Handle::Operation::WRITE_DONE,
+                    [this](bool ok, Handle::Operation /* op */) {
+                        if (!ok) [[unlikely]] {
+                            LOG_TRACE << me(*this) << " - The writes-done request failed.";
+                            return;
+                        }
+
+                        LOG_TRACE << me(*this) << " - We have told the server that we are done writing.";
+                    }));
+
+                return;
+            }
+
+            // Send some data to the server
+            req_.set_latitude(100);
+            req_.set_longitude(sent_messages_);
+
+            // Now, lets register another write operation
+            rpc_->Write(req_, io_handle_.tag(
+                Handle::Operation::WRITE,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                        LOG_TRACE << me(*this) << " - The write-request failed.";
+                        return;
+                    }
+
+                    write(false);
+                }));
+        }
+
+        Handle io_handle_{*this};
+        Handle finish_handle_{*this};
+        size_t sent_messages_ = 0;
+
+        ::grpc::ClientContext ctx_;
+        ::routeguide::Point req_;
+        ::routeguide::RouteSummary reply_;
+        ::grpc::Status status_;
+        std::unique_ptr<  ::grpc::ClientAsyncWriter< ::routeguide::Point>> rpc_;
+    }; // RecordRouteRequest
+
+
+    class RouteChatRequest : public RequestBase {
+    public:
+
+        RouteChatRequest(EverythingClient& owner)
+            : RequestBase(owner) {
+
+            LOG_DEBUG << me(*this) << " - Connecting...";
+
+            // Initiate the async request.
+            rpc_ = owner.grpc().stub_->AsyncRouteChat(&ctx_, cq(), in_handle_.tag(
+                Handle::Operation::CONNECT,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                        LOG_WARN << me(*this) << " - The request failed (connect).";
+                        return;
+                    }
+
+                    // We are initiating both reading and writing.
+                    // Some clients may initiate only a read or a write at this time,
+                    // depending on the use-case.
+                    read(true);
+                    write(true);
+                }));
+
+            assert(rpc_);
+            rpc_->Finish(&status_, finish_handle_.tag(
+                Handle::Operation::FINISH,
+                [this](bool ok, Handle::Operation /* op */) mutable {
+                    if (!ok) [[unlikely]] {
+                        LOG_WARN << me(*this) << " - The request failed (connect).";
+                        return;
+                    }
+
+                    if (status_.ok()) {
+                        LOG_TRACE << me(*this) << " - Initiating a new request";
+                        static_cast<EverythingClient&>(owner_).createNext<RouteChatRequest>();
+                    } else {
+                        LOG_WARN << me(*this) << " - The request finished with error-message: "
+                                 << status_.error_message();
+                   }
+                }));
+        }
+
+    private:
+        void read(const bool first) {
+
+            if (!first) {
+                // This is where we have an actual message from the server.
+                // If this was a framework, this is where we would have called
+                // `onListFeatureReceivedOneMessage()` or or unblocked the next statement
+                // in a co-routine waiting for the next request
+
+                // In our case, let's just log it.
+                LOG_TRACE << me(*this) << " - Request successful. Message: " << reply_.message();
+                reply_.Clear();
+            }
+
+            // Now, lets register another read operation
+            rpc_->Read(&reply_, in_handle_.tag(
+                Handle::Operation::READ,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                        LOG_TRACE << me(*this) << " - The read-request failed.";
+                        return;
+                    }
+
+                    read(false);
+                }));
+        }
+
+        void write(const bool first) {
+
+            if (!first) {
+                req_.Clear();
+            }
+
+            if (++sent_messages_ > owner_.config().num_stream_messages) {
+
+                LOG_TRACE << me(*this) << " - We are done writing to the stream.";
+
+                rpc_->WritesDone(out_handle_.tag(
+                    Handle::Operation::WRITE_DONE,
+                    [this](bool ok, Handle::Operation /* op */) {
+                        if (!ok) [[unlikely]] {
+                            LOG_TRACE << me(*this) << " - The writes-done request failed.";
+                            return;
+                        }
+
+                        LOG_TRACE << me(*this) << " - We have told the server that we are done writing.";
+                  }));
+
+                return;
+            }
+
+            // Now, lets register another write operation
+            rpc_->Write(req_, out_handle_.tag(
+                Handle::Operation::WRITE,
+                [this](bool ok, Handle::Operation /* op */) {
+                    if (!ok) [[unlikely]] {
+                        LOG_TRACE << me(*this) << " - The write-request failed.";
+                        return;
+                    }
+
+                    write(false);
+                }));
+        }
+
+        Handle in_handle_{*this};
+        Handle out_handle_{*this};
+        Handle finish_handle_{*this};
+        size_t sent_messages_ = 0;
+
+        ::grpc::ClientContext ctx_;
+        ::routeguide::RouteNote req_;
+        ::routeguide::RouteNote reply_;
+        ::grpc::Status status_;
+        std::unique_ptr<  ::grpc::ClientAsyncReaderWriter< ::routeguide::RouteNote, ::routeguide::RouteNote>> rpc_;
+    }; // ListFeaturesRequest
+
+
     EverythingClient(const Config& config)
         : EventLoopBase(config) {
 
@@ -177,10 +399,11 @@ public:
 
 private:
     void nextRequest() {
-        static const std::array<std::function<void()>, 3> request_variants = {
+        static const std::array<std::function<void()>, 4> request_variants = {
             [this]{createNext<GetFeatureRequest>();},
             [this]{createNext<ListFeaturesRequest>();},
-            //[this]{createRequest<RecordRouteRequest>();}
+            [this]{createNext<RecordRouteRequest>();},
+            [this]{createNext<RouteChatRequest>();},
         };
 
         request_variants.at(config_.request_type)();
