@@ -13,6 +13,8 @@ struct Config {
     // For the clients
     enum RequestType : int {
         GetFeature = 0,
-        ListFeatures = 1
+        ListFeatures = 1,
+        RecordRoute = 2,
+        RouteChat = 3
     } request_type = GetFeature;
 };

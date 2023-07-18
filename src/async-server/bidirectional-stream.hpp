@@ -34,8 +34,8 @@ public:
                     }
 
                     // Before we do anything else, we must create a new instance of
-                    // OneRequest, so the service can handle a new request from a client.
-                    // Note that we institiate with `owner`, not `owner_`, as `owner`
+                    // GetFeatureRequest, so the service can handle a new request from a client.
+                    // Note that we instantiate with `owner`, not `owner_`, as `owner`
                     // has the complete typeinfo of `EverythingSvr`.
                     owner_.createNew<GetFeatureRequest>(owner);
 
@@ -191,12 +191,6 @@ public:
                 LOG_TRACE << "Got message: longitude=" << req_.longitude()
                           << ", latitude=" << req_.latitude();
 
-                // Prepare the reply-object to be re-used.
-                // This is usually cheaper than creating a new one for each write operation.
-
-                // *Write* will relay the event that the write is completed on the queue, using *this* as tag.
-                // Initiate the first read operation
-
                 // Reset the req_ message. This is cheaper than allocating a new one for each read.
                 req_.Clear();
             }
@@ -272,21 +266,21 @@ public:
                         // so the service can handle a new request from a client.
                         owner_.createNew<RecordRouteRequest>(owner);
 
-                        /* There arte multiple ways to handle the message-flow in a bidirectional stream.
+                        /* There are multiple ways to handle the message-flow in a bidirectional stream.
                          *
-                         * One party can send the first message, and the other party can respond wil a message,
+                         * One party can send the first message, and the other party can respond with a message,
                          * until the one or both parties gets bored.
                          *
                          * Both parties can wait for some event to occur, and send a message when appropriate.
                          *
-                         * One party can send occational updates (for example location data) and the other
+                         * One party can send occasional updates (for example location data) and the other
                          * party can respond with one or more messages when appropriate.
                          *
                          * Both parties can start sending messages as soon as the connection is made.
                          * That's what we are doing (or at least preparing for) in this example.
                          */
 
-                        read(true); // Wait for the first incoming message
+                        read(true);   // Initiate the read for the first incoming message
                         write(true);  // Initiate the first write operation.
             }));
         }
@@ -323,7 +317,7 @@ public:
                     return finishIfDone();
                     }
 
-                    read(false);
+                    read(false); // Initiate the read for the next incoming message
             }));
         }
 
@@ -339,21 +333,23 @@ public:
                 return finishIfDone();
             }
 
-            // Start new write
+            // This is where we have are ready to write a new message.
+            // If this was code for a framework, this is where we would have called
+            // the `onRpcRequestRouteChatReadytoSendNewMessage()` method, or unblocked
+            // the next statement in a co-routine awaiting the next state-change.
+
             reply_.set_message(std::string{"Server Message #"} + std::to_string(replies_));
 
-            // ... and the write-operation takes a reference.
+            // Start new write
             stream_.Write(reply_, out_handle_.tag(
                                 Handle::Operation::WRITE,
                 [this](bool ok, Handle::Operation /* op */) {
                     if (!ok) [[unlikely]] {
                         // The operation failed.
-                        // This is normal on an incoming stream, when there are no more messages.
-                        // As far as I know, there is no way at this point to deduce if the false status is
-                        // because the client is done sending messages, or because we encountered
-                        // an error.
-                        LOG_TRACE << "The write-operation failed.";
+                        LOG_WARN << "The write-operation failed.";
 
+                        // When ok is false here, we will not be able to write
+                        // anything on this stream.
                         done_writing_ = true;
                         return finishIfDone();
                     }
@@ -397,7 +393,7 @@ public:
         ::routeguide::RouteNote req_;
         ::routeguide::RouteNote reply_;
 
-        // Interesingly, the template the class is named `*ReaderWriter`, while
+        // Interestingly, the template the class is named `*ReaderWriter`, while
         // the template argument order is first Writer type and then Reader type.
         // Lot's of room for false assumptions and subtle errors here ;)
         ::grpc::ServerAsyncReaderWriter< decltype(reply_), decltype(req_)> stream_{&ctx_};

@@ -47,7 +47,7 @@ public:
     /*! Base class for requests
      *
      *  In order to use `this` as a tag and avoid any special processing in the
-     *  event-loop, the simplest approacch in C++ is to let the request implementations
+     *  event-loop, the simplest approach in C++ is to let the request implementations
      *  inherit form a base-class that contains the shared code they all need, and
      *  a pure virtual method for the state-machine.
      */
@@ -263,10 +263,10 @@ public:
     };
 
 
-    /*! Implementation for the `ListFeatures()` RPC call.
+    /*! Implementation for the `RecordRouteRequest()` RPC call.
      *
      *  This is a bit more advanced. We receive a normal request message,
-     *  but the reply is a stream of messges.
+     *  but the reply is a stream of messages.
      */
     class RecordRouteRequest : public RequestBase {
     public:
@@ -288,7 +288,7 @@ public:
         }
 
         // State-machine to deal with a single request
-        // This works almost like a co-routine, where we work our way down for each
+        // This works almost like a co-routine, where we work our way down (or repeat) for each
         // time we are called. The State_ could just as well have been an integer/counter;
         void proceed(bool ok) override {
             switch(state_) {
@@ -296,7 +296,7 @@ public:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
                     // Let's end it here.
-                    LOG_WARN << "The request-operation failed. Assuming we are shutting down";
+                    LOG_WARN << "The request-operation failed.";
                     return done();
                 }
 
@@ -345,13 +345,11 @@ public:
                           << ", latitude=" << req_.latitude();
 
                 // Prepare the reply-object to be re-used.
-                // This is usually cheaper than creating a new one for each write operation.
-
-                // *Write* will relay the event that the write is completed on the queue, using *this* as tag.
-                // Initiate the first read operation
-
-                // Reset the req_ message. This is cheaper than allocating a new one for each read.
+                // This is usually cheaper than creating a new one for each read operation.
                 req_.Clear();
+
+                // *Read* will relay the event that the write is completed on the queue, using *this* as tag.
+                // Initiate the first read operation
                 reader_.Read(&req_, this);
 
                 // Now, we wait for the read to complete

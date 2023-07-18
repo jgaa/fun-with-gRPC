@@ -154,7 +154,7 @@ public:
             parent.incCounter();
         }
 
-        void proceed(bool ok, Handle::Operation /*op */) {
+        void proceed(bool ok, Handle::Operation /*op */)  {
             if (!ok) [[unlikely]] {
                 LOG_WARN << boost::typeindex::type_id_runtime(*this).pretty_name()
                          << " - The request failed. Status: " << status_.error_message();
@@ -212,7 +212,7 @@ public:
             parent.incCounter();
         }
 
-        // As promised, the state-machine get's more complex when we have
+        // As promised, the state-machine gets more complex when we have
         // streams. In this case, we have three states to deal with on each invocation:
         // 1) The state of the instance - how many async operations have we started?
         //    This is handled by reference-counting, so we don't have to deal with it in
@@ -316,7 +316,7 @@ public:
             // Initiate the async request.
             // Note that this time, we have to supply the tag to the gRPC initiation method.
             // That's because we will get an event that the request is in progress
-            // before we should (can?) start reading the replies.
+            // before we should (can?) start writing the requests.
             rpc_ = parent_.stub_->AsyncRecordRoute(&ctx_, &reply_, &parent_.cq_, connect_handle.tag());
             assert(rpc_);
 
@@ -363,7 +363,11 @@ public:
                     break;
                 }
 
-                // In our case, let's just log it.
+                // This is where we have sent an actual message to the server.
+                // If this was a framework, this is where we would have called
+                // `onRecordRouteReadyToSendNext()` or or unblocked the next statement
+                // in a co-routine waiting for the next state
+
                 LOG_TRACE << me() << " - Write was successful.";
 
                 if (++sent_messages_ >= parent_.config_.num_stream_messages) {
@@ -374,18 +378,14 @@ public:
                     break;
                 }
 
-                // This is where we have sent an actual message to the server.
-                // If this was a framework, this is where we would have called
-                // `onRecordRouteReadyToSendNext()` or or unblocked the next statement
-                // in a co-routine waiting for the next state
-
                 // Prepare the message-object to be re-used.
                 // This is usually cheaper than creating a new one for each read operation.
                 req_.Clear();
+
                 req_.set_latitude(100);
                 req_.set_longitude(sent_messages_);
 
-                // Now, lets register another read operation
+                // Now, lets register another write operation
                 rpc_->Write(req_, write_handle.tag());
                 break;
 
@@ -498,7 +498,7 @@ public:
                 LOG_TRACE << "AsyncNext() returned an event. The boolean status is "
                           << (ok ? "OK" : "FAILED");
 
-                // Use a scope to allow a new variable inside a case stat`ement.
+                // Use a scope to allow a new variable inside a case statement.
                 {
                     auto handle = static_cast<RequestBase::Handle *>(tag);
 

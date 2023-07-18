@@ -113,6 +113,7 @@ int main(int argc, char* argv[]) {
 
     general.add_options()
         ("help,h", "Print help and exit")
+        ("version,v", "Print version and exit")
         ("address,a",
          po::value(&config.address)->default_value(config.address),
          "Network address to use for gRPC.")
@@ -129,6 +130,7 @@ int main(int argc, char* argv[]) {
          "Number of messages to send in a reply-stream.")
         ;
 
+    const auto appname = filesystem::path(argv[0]).stem().string();
     po::options_description cmdline_options;
     cmdline_options.add(general);
     po::variables_map vm;
@@ -136,15 +138,24 @@ int main(int argc, char* argv[]) {
         po::store(po::command_line_parser(argc, argv).options(cmdline_options).run(), vm);
         po::notify(vm);
     } catch (const std::exception& ex) {
-        cerr << filesystem::path(argv[0]).stem().string()
+        cerr << appname
              << " Failed to parse command-line arguments: " << ex.what() << endl;
         return -1;
     }
 
     if (vm.count("help")) {
-        std::cout << filesystem::path(argv[0]).stem().string() << " [options]";
+        std::cout <<appname << " [options]";
         std::cout << cmdline_options << std::endl;
         return -2;
+    }
+
+    if (vm.count("version")) {
+        std::cout << appname << ' ' << VERSION << endl
+                  << "Using C++ standard " << __cplusplus << endl
+                  << "Platform " << BOOST_PLATFORM << endl
+                  << "Compiler " << BOOST_COMPILER << endl
+                  << "Build date " <<__DATE__ << endl;
+        return -3;
     }
 
     if (auto level = toLogLevel(log_level_console)) {
@@ -152,8 +163,7 @@ int main(int argc, char* argv[]) {
             make_unique<logfault::StreamHandler>(clog, *level));
     }
 
-    const auto my_name = filesystem::path(argv[0]).stem().string();
-    LOG_INFO << my_name << " starting up.";
+    LOG_INFO << appname << " starting up.";
 
     try {
         process();
@@ -161,5 +171,5 @@ int main(int argc, char* argv[]) {
         cerr << "Caught exception from process: " << ex.what() << endl;
     }
 
-    LOG_INFO << my_name << " done! ";
+    LOG_INFO << appname << " done! ";
 } // main

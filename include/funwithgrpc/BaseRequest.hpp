@@ -60,12 +60,11 @@ public:
 
     class RequestBase {
     public:
-        struct Void {};
 
         class Handle
         {
         public:
-            // In this implementation, the opertation is informative.
+            // In this implementation, the operation is informative.
             // It has no side-effects.
             enum Operation {
                 INVALID,
@@ -143,7 +142,7 @@ public:
                               << " op=" << name(current_op) << ", ok=" << ok;
 
                     // Move `proceed` to the stack.
-                    // There is a good probablility that `proceed()` will call `tag()`,
+                    // There is a good probability that `proceed()` will call `tag()`,
                     // which will overwrite the current value in the Handle's instance.
                     auto proceed = std::move(proceed_);
                     proceed(ok, current_op);
@@ -252,12 +251,10 @@ public:
                 LOG_TRACE << "AsyncNext() returned an event. The status is "
                           << (ok ? "OK" : "FAILED");
 
-                // Use a scope to allow a new variable inside a case statement.
                 {
                     auto request = static_cast<typename RequestBase::Handle *>(tag);
 
-                    // Now, let the OneRequest state-machine deal with the event.
-                    // We could have done it here, but that code would smell really nasty.
+                    // Now, let the RequestBase::Handle state-machine deal with the event.
                     request->proceed(ok);
                 }
                 break;

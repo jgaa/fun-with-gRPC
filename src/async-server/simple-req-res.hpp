@@ -87,6 +87,7 @@ public:
 
             default:
                 LOG_ERROR << "Logic error / unexpected state in proceed()!";
+                assert(false);
             } // switch
         }
 
@@ -131,9 +132,18 @@ public:
 
     void init() {
         grpc::ServerBuilder builder;
+
+        // Tell gRPC what TCP address/port to listen to and how to handle TLS.
+        // grpc::InsecureServerCredentials() will use HTTP 2.0 without encryption.
         builder.AddListeningPort(config_.address, grpc::InsecureServerCredentials());
+
+        // Tell gRPC what rpc methods we support.
+        // The code for the class exposed by `service_` is generated from our proto-file.
         builder.RegisterService(&service_);
+
+        // Get a queue for our async events
         cq_ = builder.AddCompletionQueue();
+
         // Finally assemble the server.
         server_ = builder.BuildAndStart();
         LOG_INFO
@@ -160,7 +170,7 @@ public:
             const auto deadline = std::chrono::system_clock::now()
                                   + std::chrono::milliseconds(1000);
 
-            // Get any IO operation that is ready.
+            // Get the event for any async operation that is ready.
             const auto status = cq_->AsyncNext(&tag, &ok, deadline);
 
             // So, here we deal with the first of the three states: The status from Next().

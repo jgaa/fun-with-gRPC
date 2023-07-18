@@ -5,8 +5,8 @@ add_executable(${PROJECT_NAME}
     unary-client.hpp
     unary-and-stream-client.hpp
     bidirectional-stream-client.hpp
-    Config.h
     ${FUN_ROOT}/include/funwithgrpc/BaseRequest.hpp
+    ${FUN_ROOT}/include/funwithgrpc/Config.h
 )
 
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 20)

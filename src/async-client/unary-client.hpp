@@ -31,7 +31,7 @@ public:
 
         void proceed(bool ok) {
             if (!ok) [[unlikely]] {
-                LOG_WARN << "OneRequest: The request failed. Status: " << status_.error_message();
+                LOG_WARN << "OneRequest: The request failed.";
                 return done();
             }
 
