@@ -42,7 +42,7 @@ public:
                 [this, &owner](bool ok, Handle::Operation /* op */) {
 
                     if (!ok) [[unlikely]] {
-                    LOG_WARN << me(*this) << " - The request failed. Status: " << status_.error_message();
+                    LOG_WARN << me(*this) << " - The request failed.";
                         return;
                     }
 
@@ -68,7 +68,6 @@ public:
         std::unique_ptr< ::grpc::ClientAsyncResponseReader<decltype(reply_)>> rpc_;
 
     }; // GetFeatureRequest
-
 
 
     class ListFeaturesRequest : public RequestBase {
@@ -277,7 +276,7 @@ public:
                 Handle::Operation::FINISH,
                 [this](bool ok, Handle::Operation /* op */) mutable {
                     if (!ok) [[unlikely]] {
-                        LOG_WARN << me(*this) << " - The request failed (connect).";
+                        LOG_WARN << me(*this) << " - The request failed (finish).";
                         return;
                     }
 

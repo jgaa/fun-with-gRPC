@@ -333,7 +333,7 @@ public:
                 return finishIfDone();
             }
 
-            // This is where we have are ready to write a new message.
+            // This is where we are ready to write a new message.
             // If this was code for a framework, this is where we would have called
             // the `onRpcRequestRouteChatReadytoSendNewMessage()` method, or unblocked
             // the next statement in a co-routine awaiting the next state-change.
