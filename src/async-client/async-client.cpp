@@ -47,7 +47,7 @@ void process() {
     if (client_type == "first") {
         runClient<SimpleReqResClient>();
     } else if (client_type == "second") {
-        runClient<UnaryAndSingleStreamClient>();  
+        runClient<UnaryAndSingleStreamClient>();
     } else if (client_type == "third") {
         runClient<EverythingClient>();
     } else {

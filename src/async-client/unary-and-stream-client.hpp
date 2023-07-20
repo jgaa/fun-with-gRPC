@@ -191,7 +191,7 @@ public:
     class ListFeaturesRequest : public RequestBase {
     public:
         // Now we are implementing an actual, trivial state-machine, as
-        // we will return an unknown number of messages.
+        // we will read an unknown number of messages.
 
         ListFeaturesRequest(UnaryAndSingleStreamClient& parent)
             : RequestBase(parent) {

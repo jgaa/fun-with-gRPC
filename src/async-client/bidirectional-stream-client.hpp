@@ -364,7 +364,7 @@ public:
         ::routeguide::RouteNote reply_;
         ::grpc::Status status_;
         std::unique_ptr<  ::grpc::ClientAsyncReaderWriter< ::routeguide::RouteNote, ::routeguide::RouteNote>> rpc_;
-    }; // ListFeaturesRequest
+    }; // RouteChatRequest
 
 
     EverythingClient(const Config& config)
