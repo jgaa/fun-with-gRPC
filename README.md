@@ -1,4 +1,4 @@
-# fun-with-gRPC
+# Fun with gRPC and C++
 
 It happens that I want to use gRPC in my upcoming [DNS server](https://github.com/jgaa/nsblast).
 
