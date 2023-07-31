@@ -32,4 +32,6 @@ include(cmake/3rdparty.cmake)
 add_subdirectory(src/grpc)
 add_subdirectory(src/async-server)
 add_subdirectory(src/async-client)
+add_subdirectory(src/callback-server)
+
 
