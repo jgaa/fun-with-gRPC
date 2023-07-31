@@ -40,11 +40,10 @@ public:
             return ++id;
         }
 
-        template <typename reqT>
-        static std::string me(reqT& req) {
-            return boost::typeindex::type_id_runtime(req).pretty_name()
+        std::string me() const {
+            return boost::typeindex::type_id_runtime(static_cast<const T&>(*this)).pretty_name()
                    + " #"
-                   + std::to_string(req.client_id_);
+                   + std::to_string(client_id_);
         }
 
     protected:
@@ -85,7 +84,8 @@ public:
 
             LOG_TRACE << "Dealing with one GetFeature() RPC. latitude="
                       << req->latitude()
-                      << ", longitude=" << req->longitude();
+                      << ", longitude=" << req->longitude()
+                      << ", peer=" << ctx->peer();
 
             // Give a nice responce
             resp->set_name("whatever");
@@ -227,7 +227,6 @@ public:
                 ServerBidiReactorImpl(CallbackSvc& owner)
                     : owner_{owner} {
 
-
                     /* There are multiple ways to handle the message-flow in a bidirectional stream.
                      *
                      * One party can send the first message, and the other party can respond with a message,
@@ -249,7 +248,7 @@ public:
                 void OnDone() override { delete this; }
                 void OnReadDone(bool ok) override {
                     if (!ok) {
-                        LOG_TRACE << me(*this) << "- The read-operation failed. It's probably not an error :)";
+                        LOG_TRACE << me() << "- The read-operation failed. It's probably not an error :)";
                         done_reading_ = true;
                         return finishIfDone();
 
@@ -297,7 +296,7 @@ public:
                     if (++replies_ > owner_.config().num_stream_messages) {
                         done_writing_ = true;
 
-                        LOG_TRACE << me(*this) << " - We are done writing to the stream.";
+                        LOG_TRACE << me() << " - We are done writing to the stream.";
                         return finishIfDone();
                     }
 
@@ -314,7 +313,7 @@ public:
 
                 void finishIfDone() {
                     if (!sent_finish_ && done_reading_ && done_writing_) {
-                        LOG_TRACE << me(*this) << " - We are done reading and writing. Sending finish!";
+                        LOG_TRACE << me() << " - We are done reading and writing. Sending finish!";
                         Finish(grpc::Status::OK);
                         sent_finish_ = true;
                         return;
@@ -330,7 +329,12 @@ public:
                 bool sent_finish_ = false;
             };
 
-            return createNew<ServerBidiReactorImpl>(owner_);
+
+            auto instance = createNew<ServerBidiReactorImpl>(owner_);
+            LOG_TRACE << instance->me()
+                      << " - Starting new bidirectional stream conversation with "
+                      << ctx->peer();
+            return instance;
         }
 
     private:
