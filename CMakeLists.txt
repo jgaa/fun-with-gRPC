@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(fun-with-grpc
     DESCRIPTION "gRPC experiments"
     HOMEPAGE_URL https://github.com/jgaa/fun-with-gRPC
-    VERSION 0.1.0
+    VERSION 0.2.0
     LANGUAGES CXX)
 
 add_definitions(-DVERSION=\"${CMAKE_PROJECT_VERSION}\")
@@ -33,5 +33,6 @@ add_subdirectory(src/grpc)
 add_subdirectory(src/async-server)
 add_subdirectory(src/async-client)
 add_subdirectory(src/callback-server)
+add_subdirectory(src/callback-client)
 
 

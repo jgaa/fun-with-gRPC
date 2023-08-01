@@ -87,10 +87,10 @@ public:
                       << ", longitude=" << req->longitude()
                       << ", peer=" << ctx->peer();
 
-            // Give a nice responce
+            // Give a nice response
             resp->set_name("whatever");
 
-            // We sould have implemented our own reactor, but this is thje reccomended
+            // We should have implemented our own reactor, but this is the recommended
             // way to do it in unary methods.
             auto* reactor = ctx->DefaultReactor();
             reactor->Finish(grpc::Status::OK);

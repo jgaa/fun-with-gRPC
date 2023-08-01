@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <future>
+#include <deque>
 
 #include <boost/type_index.hpp>
 #include <boost/type_index/runtime_cast/register_runtime_class.hpp>
@@ -64,7 +65,7 @@ public:
 
         // In order to keep the state for the duration of the async request,
         // we use this class.
-        class Impl : public Base {
+        class Impl : Base {
         public:
             Impl(EverythingCallbackClient& owner,
                  ::routeguide::Point& point,
@@ -89,9 +90,76 @@ public:
             get_feature_cb_t caller_callback_;
         };
 
-        // Shorthand for `new Impl(...)` with exception guarantee.
+        // Shorthand for `new Impl(...)` but with exception guarantee.
         std::make_unique<Impl>(*this, point, std::move(fn)).release();
-        return;
+    }
+
+
+    using feature_or_status_t = std::variant<
+            // I would have preferred a reference, but that don't work in C++ 20 in variants
+            const ::routeguide::Feature *,
+            grpc::Status
+        >;
+
+    // A callback that is called for each incoming Feature message, and finally with a status.
+    using list_features_cb_t = std::function<void(feature_or_status_t)>;
+
+    void listFeatures(::routeguide::Rectangle& rect, list_features_cb_t&& fn) {
+        class Impl
+            : Base
+            , grpc::ClientReadReactor<::routeguide::Feature> {
+        public:
+
+            Impl(EverythingCallbackClient& owner,
+                 ::routeguide::Rectangle& rect,
+                 list_features_cb_t && fn)
+                : Base(owner), req_{std::move(rect)}, caller_callback_{std::move(fn)} {
+
+                LOG_TRACE << "listFeatures starting async request.";
+
+                owner_.stub_->async()->ListFeatures(&ctx_, &req_, this);
+
+                StartRead(&resp_);
+
+                // Here we will initiate the actual async RPC
+                StartCall();
+            }
+
+            void OnReadDone(bool ok) override {
+
+                // We go on reading while ok
+                if (ok) {
+                    LOG_TRACE << "Request successful. Message: " << resp_.name();
+
+                    caller_callback_(&resp_);
+                    resp_.Clear();
+
+                    StartRead(&resp_);
+                } else {
+                    LOG_TRACE << "Read failed (end of stream?)";
+                }
+            }
+            void OnDone(const grpc::Status& s) override {
+                if (s.ok()) {
+                    LOG_TRACE << "Request succeeded.";
+                } else {
+                    LOG_TRACE << "Request failed: " << s.error_message();
+                }
+
+                caller_callback_(s);
+                delete this;
+            }
+
+        private:
+
+            grpc::ClientContext ctx_;
+            ::routeguide::Rectangle req_;
+            ::routeguide::Feature resp_;
+            list_features_cb_t caller_callback_;
+        };
+
+        // Shorthand for `new Impl(...)` but with exception guarantee.
+        std::make_unique<Impl>(*this, rect, std::move(fn)).release();
     }
 
     void nextGextFeature(size_t recid) {
@@ -117,10 +185,41 @@ public:
         });
     }
 
+    void nextListFeatures(size_t recid) {
+        ::routeguide::Rectangle rect;
+        rect.mutable_hi()->set_latitude(recid);
+        rect.mutable_hi()->set_longitude(2);
+
+        LOG_TRACE << "Calling listFeatures #" << recid;
+
+        listFeatures(rect, [this, recid](feature_or_status_t val) {
+
+            if (std::holds_alternative<const ::routeguide::Feature *>(val)) {
+                auto feature = std::get<const ::routeguide::Feature *>(val);
+                assert(feature);
+                LOG_TRACE << "nextListFeatures #" << recid
+                          << " - Received feature: " << feature->name();
+            } else if (std::holds_alternative<grpc::Status>(val)) {
+                auto status = std::get<grpc::Status>(val);
+                if (status.ok()) {
+                    LOG_TRACE << "nextListFeatures #" << recid
+                              << " done. Initiating next request ...";
+                    nextRequest();
+                } else {
+                    LOG_TRACE << "nextListFeatures #" << recid
+                              << " failed: " <<  status.error_message();
+                }
+            } else {
+                assert(false && "unexpected value type in variant!");
+            }
+
+        });
+    }
+
     void nextRequest() {
         static const std::array<std::function<void(size_t)>, 4> request_variants = {
             [this](size_t recid){nextGextFeature(recid);},
-//            [this]{createNext<ListFeaturesRequest>();},
+            [this](size_t recid){nextListFeatures(recid);},
 //            [this]{createNext<RecordRouteRequest>();},
 //            [this]{createNext<RouteChatRequest>();},
             };
