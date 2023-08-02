@@ -152,8 +152,7 @@ public:
         }
 
         try {
-            auto instance = std::make_unique<OneRequest>(*this);
-            instance.release();
+            new OneRequest(*this);
         } catch (const std::exception& ex) {
             LOG_ERROR << "Got exception while creating a new instance. Error: "
                       << ex.what();

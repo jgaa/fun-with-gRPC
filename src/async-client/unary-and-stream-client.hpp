@@ -556,8 +556,7 @@ private:
         }
 
         try {
-            auto instance = std::make_unique<T>(*this);
-            instance.release();
+            new T(*this);
         } catch (const std::exception& ex) {
             LOG_ERROR << "Got exception while creating a new instance. Error: "
                       << ex.what();

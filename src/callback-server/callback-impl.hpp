@@ -53,13 +53,9 @@ public:
     template <typename T, typename... Args>
     static auto createNew(CallbackSvc& parent, Args... args) {
 
-        // Use make_uniqe, so we destroy the object if it throws an exception
-        // (for example out of memory).
         try {
-            auto instance = std::make_unique<T>(parent, args...);
-
+            return new T(parent, args...);
             // If we got here, the instance should be fine, so let it handle itself.
-            return instance.release();
         } catch(const std::exception& ex) {
             LOG_ERROR << "Got exception while creating a new instance. "
                       << "This ends the jurney for this instance of me. "
@@ -90,7 +86,7 @@ public:
             // Give a nice response
             resp->set_name("whatever");
 
-            // We should have implemented our own reactor, but this is the recommended
+            // We could have implemented our own reactor, but this is the recommended
             // way to do it in unary methods.
             auto* reactor = ctx->DefaultReactor();
             reactor->Finish(grpc::Status::OK);
@@ -245,7 +241,10 @@ public:
                     write(true);  // Initiate the first write operation.
                 }
 
-                void OnDone() override { delete this; }
+                void OnDone() override {
+                    done();
+                }
+
                 void OnReadDone(bool ok) override {
                     if (!ok) {
                         LOG_TRACE << me() << "- The read-operation failed. It's probably not an error :)";

@@ -104,10 +104,9 @@ public:
             // Use make_uniqe, so we destroy the object if it throws an exception
             // (for example out of memory).
             try {
-                auto instance = std::make_unique<OneRequest>(service, cq);
+                new OneRequest(service, cq);
 
                 // If we got here, the instance should be fine, so let it handle itself.
-                instance.release();
             } catch(const std::exception& ex) {
                 LOG_ERROR << "Got exception while creating a new instance. "
                           << "This will end my possibility to handle any further requests. "

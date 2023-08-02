@@ -272,10 +272,9 @@ public:
         // Use make_uniqe, so we destroy the object if it throws an exception
         // (for example out of memory).
         try {
-            auto instance = std::make_unique<reqT>(parent);
+            new reqT(parent);
 
             // If we got here, the instance should be fine, so let it handle itself.
-            instance.release();
         } catch(const std::exception& ex) {
             LOG_ERROR << "Got exception while creating a new instance. "
                       << "This may end my ability to handle any further requests. "

@@ -90,8 +90,7 @@ public:
             get_feature_cb_t caller_callback_;
         };
 
-        // Shorthand for `new Impl(...)` but with exception guarantee.
-        std::make_unique<Impl>(*this, point, std::move(fn)).release();
+        new Impl(*this, point, std::move(fn));
     }
 
 
@@ -139,6 +138,7 @@ public:
                     LOG_TRACE << "Read failed (end of stream?)";
                 }
             }
+
             void OnDone(const grpc::Status& s) override {
                 if (s.ok()) {
                     LOG_TRACE << "Request succeeded.";
@@ -158,8 +158,146 @@ public:
             list_features_cb_t caller_callback_;
         };
 
-        // Shorthand for `new Impl(...)` but with exception guarantee.
-        std::make_unique<Impl>(*this, rect, std::move(fn)).release();
+        new Impl(*this, rect, std::move(fn));
+    }
+
+    using on_ready_to_write_point_cb_t = std::function<bool(::routeguide::Point& point)>;
+    using on_done_route_summary_cb_t = std::function<
+        void(const grpc::Status& status, ::routeguide::RouteSummary&)>;
+
+    void recordRoute(on_ready_to_write_point_cb_t&& writerCb, on_done_route_summary_cb_t&& doneCb) {
+
+        class Impl
+            : Base
+            , grpc::ClientWriteReactor<::routeguide::Point> {
+        public:
+            Impl(EverythingCallbackClient& owner,
+                 on_ready_to_write_point_cb_t& writerCb,
+                 on_done_route_summary_cb_t& doneCb)
+                : Base(owner), writer_cb_{std::move(writerCb)}
+                , done_cb_{std::move(doneCb)}
+            {
+                LOG_TRACE << "recordRoute starting async request.";
+
+                owner_.stub_->async()->RecordRoute(&ctx_, &resp_, this);
+
+                write();
+
+                // Here we will initiate the actual async RPC
+                StartCall();
+            }
+
+            void OnWriteDone(bool ok) override {
+                write();
+            }
+
+            void OnDone(const grpc::Status& s) override {
+                done_cb_(s, resp_);
+                delete this;
+            }
+
+        private:
+            void write() {
+                // Get another message from the caller
+                req_.Clear();
+                if (writer_cb_(req_)) {
+
+                    // Note that if we had implemented a delayed `StartWrite()`, for example
+                    // by relaying the event to a task manager like `boost::asio::io_service::post()`,
+                    // we would need to call `AddHold()` either here or in the constructor.
+                    // Only when we had called `RemoveHold()` the same number of times, would
+                    // gRPC consider calling the `OnDone()` event method.
+
+                    StartWrite(&req_);
+                } else {
+                    StartWritesDone();
+                }
+            }
+
+            grpc::ClientContext ctx_;
+            ::routeguide::Point req_;
+            ::routeguide::RouteSummary resp_;
+            on_ready_to_write_point_cb_t writer_cb_;
+            on_done_route_summary_cb_t done_cb_;
+        };
+
+        new Impl(*this, writerCb, doneCb);
+    }
+
+    using on_say_something_cb_t = std::function<bool(::routeguide::RouteNote&)>;
+    using on_got_message_cb_t = std::function<void(::routeguide::RouteNote&)>;
+    using on_done_status_cb_t = std::function<void(const grpc::Status&)>;
+
+
+    void routeChat(on_say_something_cb_t&& outgoing,
+                   on_got_message_cb_t&& incoming,
+                   on_done_status_cb_t&& done) {
+
+        class Impl
+            : Base
+            , grpc::ClientBidiReactor<::routeguide::RouteNote,
+                                      ::routeguide::RouteNote>
+        {
+        public:
+            Impl(EverythingCallbackClient& owner,
+                 on_say_something_cb_t& outgoing,
+                 on_got_message_cb_t& incoming,
+                 on_done_status_cb_t& done)
+                : Base(owner), outgoing_{std::move(outgoing)}
+                , incoming_{std::move(incoming)}
+                , done_{std::move(done)} {
+
+                LOG_TRACE << "routeChat starting async request.";
+
+                owner_.stub_->async()->RouteChat(&ctx_, this);
+
+                read();
+                write();
+
+                // Here we will initiate the actual async RPC
+                StartCall();
+
+            }
+
+            void OnWriteDone(bool ok) override {
+                write();
+            }
+            void OnReadDone(bool ok) override {
+                if (ok) {
+                    incoming_(in_);
+                    read();
+                }
+            }
+            void OnDone(const grpc::Status& s) override {
+                done_(s);
+                delete this;
+            }
+
+        private:
+            void read() {
+                in_.Clear();
+                StartRead(&in_);
+            }
+
+            void write() {
+                out_.Clear();
+                if (outgoing_(out_)) {
+                    StartWrite(&out_);
+                    return;
+                }
+
+                StartWritesDone();
+            }
+
+            grpc::ClientContext ctx_;
+            ::routeguide::RouteNote in_;
+            ::routeguide::RouteNote out_;
+            on_say_something_cb_t outgoing_;
+            on_got_message_cb_t incoming_;
+            on_done_status_cb_t done_;
+        };
+
+        new Impl(*this, outgoing, incoming, done);
     }
 
     void nextGextFeature(size_t recid) {
@@ -216,19 +354,102 @@ public:
         });
     }
 
+    void nextRecordRoute(size_t recid) {
+
+        recordRoute(
+            // Callback to provide data to send to the server
+            // Note that we instatiate a local variable `count` that lives
+            // in the scope of one instance of the lambda function.
+            [this, recid, count=size_t{0}](::routeguide::Point& point) mutable {
+                if (++count > config_.num_stream_messages) [[unlikely]] {
+                    // We are done
+                    return false;
+                }
+
+                // Just pick some data to set.
+                // In a real implementation we would have to get prerpared data or
+                // data from a quick calculation. We have to return immediately since
+                // we are using one of gRPC's worker threads.
+                // If we needed to do some work, like fetching from a database, we
+                // would need another workflow where the event was dispatched to a
+                // task manager or thread-pool, argument was a write functor rather than
+                // the data object itself.
+                point.set_latitude(count);
+                point.set_longitude(100);
+
+                LOG_TRACE << "RecordRoute reuest# " << recid
+                          << " - sending latitude " << count;
+
+                return true;
+            },
+
+            // Callback to handle the completion of the request and its status/reply.
+            [this, recid](const grpc::Status& status, ::routeguide::RouteSummary& summery) mutable {
+                if (!status.ok()) {
+                    LOG_WARN << "RecordRoute reuest # " << recid
+                             << " failed: " << status.error_message();
+                    return;
+                }
+
+                LOG_TRACE << "RecordRoute request #" << recid << " is done. Distance: "
+                          << summery.distance();
+
+                nextRequest();
+            });
+    }
+
+
+    void nextRouteChat(size_t recid) {
+
+        routeChat(
+            // Compose an outgoing message
+            [this, recid, count=size_t{0}](::routeguide::RouteNote& msg) mutable {
+                if (++count > config_.num_stream_messages) [[unlikely]] {
+                    // We are done
+                    return false;
+                }
+
+                // Just pick some data to set.
+                msg.set_message(std::string{"chat message "} + std::to_string(count));
+
+                LOG_TRACE << "RouteChat reuest# " << recid
+                          << " outgoing message " << count;
+
+                return true;
+            },
+            // We received an incoming message
+            [this, recid ](::routeguide::RouteNote& msg) {
+                LOG_TRACE << "RouteChat reuest# " << recid
+                          << " incoming message: " << msg.message();
+            },
+            // The conversation is over.
+            [this, recid ](const grpc::Status& status) {
+                if (!status.ok()) {
+                    LOG_WARN << "RouteChat reuest # " << recid
+                             << " failed: " << status.error_message();
+                    return;
+                }
+
+                LOG_TRACE << "RecordRoute request #" << recid << " is done.";
+                nextRequest();
+            }
+
+            );
+
+    }
+
     void nextRequest() {
         static const std::array<std::function<void(size_t)>, 4> request_variants = {
             [this](size_t recid){nextGextFeature(recid);},
             [this](size_t recid){nextListFeatures(recid);},
-//            [this]{createNext<RecordRouteRequest>();},
-//            [this]{createNext<RouteChatRequest>();},
+            [this](size_t recid){nextRecordRoute(recid);},
+            [this](size_t recid){nextRouteChat(recid);},
             };
 
         if (auto recid = ++request_count_; recid <= config_.num_requests) {
             request_variants.at(config_.request_type)(recid);
         }
     }
-
 
     void run() {
 
@@ -237,7 +458,6 @@ public:
             nextRequest();
         }
 
-        // Wait for everything to finish
         LOG_DEBUG << "Waiting for all requests to finish...";
         done_.get_future().get();
         LOG_INFO << "Done!";
