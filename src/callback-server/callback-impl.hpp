@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <boost/type_index.hpp>
 #include <boost/type_index/runtime_cast/register_runtime_class.hpp>
 
@@ -13,14 +15,14 @@
 #include "funwithgrpc/Config.h"
 
 /*!
- * \brief The SimpleReqRespCallbackSvc class
+ * \brief The CallbackSvc class
  *
- * This class implements just the basic unary RPC operation `GetFeature()`.
+ * This class implements all the methods using the gRPC callback
+ * interface.
  */
 
 class CallbackSvc {
 public:
-
     template <typename T>
     class ReqBase {
     public:
@@ -33,11 +35,6 @@ public:
             LOG_TRACE << "If the program crash now, it was a bad idea to delete this ;)  #"
                       << client_id_ << " at address " << this;
             delete static_cast<T *>(this);
-        }
-
-        static size_t getNewClientId() {
-            static size_t id = 0;
-            return ++id;
         }
 
         std::string me() const {
@@ -65,12 +62,18 @@ public:
         abort();
     }
 
+    /*! RPC implementation
+     *
+     *  This class overrides our RPC methods from the code
+     *  generatoed by rpcgen. This is where we receive the RPC events from gRPC.
+     */
     class CallbackServiceImpl : public ::routeguide::RouteGuide::CallbackService {
     public:
         CallbackServiceImpl(CallbackSvc& owner)
             : owner_{owner} {}
 
-        // RPC's
+        /*! RPC callback event for GetFeature
+         */
         grpc::ServerUnaryReactor *GetFeature(grpc::CallbackServerContext *ctx,
                                              const routeguide::Point *req,
                                              routeguide::Feature *resp) override {
@@ -83,7 +86,7 @@ public:
                       << ", longitude=" << req->longitude()
                       << ", peer=" << ctx->peer();
 
-            // Give a nice response
+            // Give a nice, thoughtful response
             resp->set_name("whatever");
 
             // We could have implemented our own reactor, but this is the recommended
@@ -93,19 +96,33 @@ public:
             return reactor;
         }
 
+        /*! RPC callback event for ListFeatures
+         */
         ::grpc::ServerWriteReactor< ::routeguide::Feature>* ListFeatures(
             ::grpc::CallbackServerContext* ctx, const ::routeguide::Rectangle* req) override {
 
-            // We're using a class to implement the work-flow required to answer the request
-            // We can only send one message at the time and must wait for callbacks to continue.
-
+            // Now, we need to keep the state and buffers required to handle the stream
+            // until the request is completed. We also need to return from this
+            // method immediately.
+            //
+            // We solve these conflicting requirements by implementing a class that overrides
+            // the async gRPC stream interface `ServerWriteReactor`, and then adding our
+            // state and buffers here.
+            //
+            // This class will deal with the request. The method we are in will just
+            // allocate an instance of our class on the heap and return.
+            //
             // Yes - it's ugly. It's the best the gRPC team have been able to come up with :/
             class ServerWriteReactorImpl
+                // Some shared code we need for convenience for all the RPC Request classes
                 : public ReqBase<ServerWriteReactorImpl>
+                // The interface to the gRPC async stream for this request.
                 , public ::grpc::ServerWriteReactor< ::routeguide::Feature> {
             public:
                 ServerWriteReactorImpl(CallbackSvc& owner)
                     : owner_{owner} {
+
+                    // Start replying with the first message on the stream
                     reply();
                 }
 
@@ -118,8 +135,8 @@ public:
                     if (!ok) [[unlikely]] {
                         LOG_WARN << "The write-operation failed.";
 
-                        // We still need to call Finish!
-                        Finish(grpc::Status::OK);
+                        // We still need to call Finish or the request will remain stuck!
+                        Finish({grpc::StatusCode::UNKNOWN, "stream write failed"});
                         return;
                     }
 
@@ -151,6 +168,8 @@ public:
             return createNew<ServerWriteReactorImpl>(owner_);
         };
 
+        /*! RPC callback event for RecordRoute
+         */
         ::grpc::ServerReadReactor< ::routeguide::Point>* RecordRoute(
             ::grpc::CallbackServerContext* ctx, ::routeguide::RouteSummary* reply) override {
 
@@ -170,51 +189,52 @@ public:
 
                 void OnReadDone(bool ok) override {
                     if (ok) {
-                        // This is where we have read a message from the request.
-                        // If this was code for a framework, this is where we would have called
-                        // the `onRpcRequestRecordRouteGotMessage()` method, or unblocked the next statement
-                        // in a co-routine awaiting the next state-change.
-                        //
-                        // In our case, let's just log it.
+                        // We have read a message from the request.
+
                         LOG_TRACE << "Got message: longitude=" << req_.longitude()
                                   << ", latitude=" << req_.latitude();
 
-                        // Reset the req_ message. This is cheaper than allocating a new one for each read.
                         req_.Clear();
-                        StartRead(&req_);
-                    } else {
-                        LOG_TRACE << "The read-operation failed. It's probably not an error :)";
 
-                        // This is where we have received the request, with all it's parts,
-                        // and may formulate another answer.
-                        // If this was code for a framework, this is where we would have called
-                        // the `onRpcRequestRecordRouteDone()` method, or unblocked the next statement
-                        // in a co-routine awaiting the next state-change.
-                        //
-                        // In our case, let's just return something.
-
-                        reply_->set_distance(100);
-                        reply_->set_distance(300);
-
-                        // Here we can set the reply (in the buffer we got from gRPC) and call
-                        // Finish in one go. We don't have to wait for a callback to acknowledge
-                        // the write operation.
-
-                        Finish(grpc::Status::OK);
+                        // Initiate the next async read
+                        return StartRead(&req_);
                     }
+
+                    LOG_TRACE << "The read-operation failed. It's probably not an error :)";
+
+                    // Let's compose an exiting reply to the client.
+                    reply_->set_distance(100);
+                    reply_->set_distance(300);
+
+                    // Note that we set the reply (in the buffer we got from gRPC) and call
+                    // Finish in one go. We don't have to wait for a callback to acknowledge
+                    // the write operation.
+                    Finish(grpc::Status::OK);
+                    // When the client has received the last bits from us in regard of this
+                    // RPC, `OnDone()` will be the final event we receive.
                 }
 
             private:
                 CallbackSvc& owner_;
+
+                // Our buffer for each of the outging messages on the stream
                 ::routeguide::Point req_;
+
+                // Note that for this RPC type, gRPC owns the reply-buffer.
+                // It's a bit inconsistent and confusing, as the intefaces mostly takes
+                // pointers, but usually our imlementation onws the buffers.
                 ::routeguide::RouteSummary *reply_ = {};
             };
 
+            // This is all our method actuially does. It just creates an instance
+            // of the implementation class to deal with the request.
             return createNew<ServerReadReactorImpl>(owner_, reply);
         };
 
-        ::grpc::ServerBidiReactor< ::routeguide::RouteNote, ::routeguide::RouteNote>* RouteChat(
-            ::grpc::CallbackServerContext* ctx) override {
+        /*! RPC callback event for RouteChat
+         */
+        ::grpc::ServerBidiReactor< ::routeguide::RouteNote, ::routeguide::RouteNote>*
+            RouteChat(::grpc::CallbackServerContext* ctx) override {
 
             class ServerBidiReactorImpl
                 : public ReqBase<ServerBidiReactorImpl>
@@ -226,7 +246,7 @@ public:
                     /* There are multiple ways to handle the message-flow in a bidirectional stream.
                      *
                      * One party can send the first message, and the other party can respond with a message,
-                     * until the one or both parties gets bored.
+                     * until one or both parties gets bored.
                      *
                      * Both parties can wait for some event to occur, and send a message when appropriate.
                      *
@@ -237,24 +257,28 @@ public:
                      * That's what we are doing (or at least preparing for) in this example.
                      */
 
-                    read(true);   // Initiate the read for the first incoming message
-                    write(true);  // Initiate the first write operation.
+                    read();   // Initiate the read for the first incoming message
+                    write();  // Initiate the first write operation.
                 }
 
+                // All is done event
                 void OnDone() override {
                     done();
                 }
 
+                // The read operation is done event
                 void OnReadDone(bool ok) override {
                     if (!ok) {
                         LOG_TRACE << me() << "- The read-operation failed. It's probably not an error :)";
                         done_reading_ = true;
                         return finishIfDone();
-
                     }
 
-                    read(false);
+                    LOG_TRACE << "Incoming message: " << req_.message();
+                    read();
                 }
+
+                // The write operation is done event
                 void OnWriteDone(bool ok) override {
                     if (!ok) [[unlikely]] {
                         // The operation failed.
@@ -263,35 +287,24 @@ public:
                         // When ok is false here, we will not be able to write
                         // anything on this stream.
                         done_writing_ = true;
+
+                        // This RPC call did not end well
+                        status_ = {grpc::StatusCode::UNKNOWN, "write failed"};
+
                         return finishIfDone();
                     }
 
-                    write(false);
+                    write();
                 }
 
             private:
-                void read(const bool first) {
-                    if (!first) {
-                        // This is where we have read a message from the stream.
-                        // If this was code for a framework, this is where we would have called
-                        // the `onRpcRequestRouteChatGotMessage()` method, or unblocked the next statement
-                        // in a co-routine awaiting the next state-change.
-                        //
-                        // In our case, let's just log it.
-
-                        LOG_TRACE << "Incoming message: " << req_.message();
-                        req_.Clear();
-                    }
-
-                    // Start new read
+                void read() {
+                    // Start a new read
+                    req_.Clear();
                     StartRead(&req_);
                 }
 
-                void write(const bool first) {
-                    if (!first) {
-                        reply_.Clear();
-                    }
-
+                void write() {
                     if (++replies_ > owner_.config().num_stream_messages) {
                         done_writing_ = true;
 
@@ -299,21 +312,18 @@ public:
                         return finishIfDone();
                     }
 
-                    // This is where we are ready to write a new message.
-                    // If this was code for a framework, this is where we would have called
-                    // the `onRpcRequestRouteChatReadytoSendNewMessage()` method, or unblocked
-                    // the next statement in a co-routine awaiting the next state-change.
-
+                    // Prepare a new message to the stream
+                    reply_.Clear();
                     reply_.set_message(std::string{"Server Message #"} + std::to_string(replies_));
 
-                    // Start new write
+                    // Start new write on the stream
                     StartWrite(&reply_);
                 }
 
                 void finishIfDone() {
                     if (!sent_finish_ && done_reading_ && done_writing_) {
                         LOG_TRACE << me() << " - We are done reading and writing. Sending finish!";
-                        Finish(grpc::Status::OK);
+                        Finish(status_);
                         sent_finish_ = true;
                         return;
                     }
@@ -322,6 +332,7 @@ public:
                 CallbackSvc& owner_;
                 ::routeguide::RouteNote req_;
                 ::routeguide::RouteNote reply_;
+                grpc::Status status_;
                 size_t replies_ = 0;
                 bool done_reading_ = false;
                 bool done_writing_ = false;
@@ -338,9 +349,12 @@ public:
 
     private:
         CallbackSvc& owner_;
-    };
+    }; // class CallbackServiceImpl
 
-    void init() {
+    CallbackSvc(Config& config)
+        : config_{config} {}
+
+    void start() {
         grpc::ServerBuilder builder;
 
         // Tell gRPC what TCP address/port to listen to and how to handle TLS.
@@ -351,9 +365,6 @@ public:
         service_ = std::make_unique<CallbackServiceImpl>(*this);
         builder.RegisterService(service_.get());
 
-        // Get a queue for our async events
-        cq_ = builder.AddCompletionQueue();
-
         // Finally assemble the server.
         server_ = builder.BuildAndStart();
         LOG_INFO
@@ -363,16 +374,6 @@ public:
 
             // The useful information
             << " listening on " << config_.address;
-    }
-
-    CallbackSvc(Config& config)
-        : config_{config} {}
-
-    void start() {
-        init();
-
-        // Prepare for the first request.
-        //OneRequest::createNew(service_, *cq_);
     }
 
     void stop() {
@@ -387,14 +388,17 @@ public:
     }
 
 private:
+    const Config& config_;
+
+    // Thread-safe method to get a unique client-id for a new RPC.
+    static size_t getNewClientId() {
+        static std::atomic_size_t id{0};
+        return ++id;
+    }
+
     // An instance of our service, compiled from code generated by protoc
     std::unique_ptr<CallbackServiceImpl> service_;
 
-    // This is the Queue. It's shared for all the requests.
-    std::unique_ptr<grpc::ServerCompletionQueue> cq_;
-
     // A gRPC server object
     std::unique_ptr<grpc::Server> server_;
-
-    const Config& config_;
 };
