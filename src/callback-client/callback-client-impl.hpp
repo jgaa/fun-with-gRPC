@@ -14,14 +14,20 @@
 #include "funwithgrpc/logging.h"
 #include "funwithgrpc/Config.h"
 
-
+/*! This class implements:
+ *
+ *  - Naive methods with actual callbacks for the four RPC's in our proto-file.
+ *  - Example methods that call our naive methods
+ *  - Some utility methods
+ *  - Initialization and use of the gRPC callback interface.
+ */
 class EverythingCallbackClient {
 public:
 
     /*! RIAA reference-counting of requests in flight.
      *
      * When there are no more in flight, we signal the
-     * future that holds the thread in run().
+     * future that holds the calling thread in run().
      */
     struct Base {
         Base(EverythingCallbackClient& owner)
@@ -59,8 +65,12 @@ public:
         assert(stub_);
     }
 
+    /// Callback function with the result of the unary RPC call
     using get_feature_cb_t = std::function<void(const grpc::Status& status,
                                                 const ::routeguide::Feature& feature)>;
+
+    /*! Naive implementation of `GetFeature` with an actual callback.
+     */
     void getFeature(::routeguide::Point& point, get_feature_cb_t && fn) {
 
         // In order to keep the state for the duration of the async request,
@@ -91,21 +101,42 @@ public:
         };
 
         new Impl(*this, point, std::move(fn));
-    }
+    } // getFeature
 
 
+    /*! Data for a callback function suitable for `ListFeatures`.
+     *
+     *  Here we use a union that eiher contains a Feature message received
+     *  from the stream, or the final Status message. Alternatively we could have
+     *  used two callbacks. However, std::variant (C++ unions) can be useful in
+     *  such cases as this one.
+     *
+     *  We use a pointer to the Feature so that we don't have to make a deep
+     *  copy for each received message just for the purpose of "doing the right thing" ;)
+     */
     using feature_or_status_t = std::variant<
             // I would have preferred a reference, but that don't work in C++ 20 in variants
             const ::routeguide::Feature *,
             grpc::Status
         >;
 
-    // A callback that is called for each incoming Feature message, and finally with a status.
+    /*! A callback function suitable to handle the events following a ListFeatures RPC
+     */
     using list_features_cb_t = std::function<void(feature_or_status_t)>;
 
+    /*! Naive implementation of `ListFeatures` with a callback for the events.
+     */
     void listFeatures(::routeguide::Rectangle& rect, list_features_cb_t&& fn) {
+
+        /*! A class that deals with this RPC
+         *
+         *  It overrides the events we need, owns our buffers and implements
+         *  our boilerplate code needed to call the user supplied callback.
+         */
         class Impl
+            // Our shared code for all the RPC's we implementn here
             : Base
+            // The async gRPC stream interface for this RPC
             , grpc::ClientReadReactor<::routeguide::Feature> {
         public:
 
@@ -116,14 +147,20 @@ public:
 
                 LOG_TRACE << "listFeatures starting async request.";
 
+                // Glue this instance of this class to an initiation
+                // of the ListFeatures RPC.
                 owner_.stub_->async()->ListFeatures(&ctx_, &req_, this);
 
+                // Initiate the first async read.
+                // Since StartCall is not yet called, the operation is
+                // queued by gRPC.
                 StartRead(&resp_);
 
-                // Here we will initiate the actual async RPC
+                // Here we initiate the actual async RPC
                 StartCall();
             }
 
+            /*! Callback event when a read operation is complete */
             void OnReadDone(bool ok) override {
 
                 // We go on reading while ok
@@ -131,19 +168,20 @@ public:
                     LOG_TRACE << "Request successful. Message: " << resp_.name();
 
                     caller_callback_(&resp_);
-                    resp_.Clear();
 
-                    StartRead(&resp_);
-                } else {
-                    LOG_TRACE << "Read failed (end of stream?)";
+                    resp_.Clear();
+                    return StartRead(&resp_);
                 }
+
+                LOG_TRACE << "Read failed (end of stream?)";
             }
 
+            /*! Callback event when the RPC is complete */
             void OnDone(const grpc::Status& s) override {
                 if (s.ok()) {
                     LOG_TRACE << "Request succeeded.";
                 } else {
-                    LOG_TRACE << "Request failed: " << s.error_message();
+                    LOG_WARN << "Request failed: " << s.error_message();
                 }
 
                 caller_callback_(s);
@@ -151,24 +189,47 @@ public:
             }
 
         private:
-
             grpc::ClientContext ctx_;
             ::routeguide::Rectangle req_;
             ::routeguide::Feature resp_;
             list_features_cb_t caller_callback_;
         };
 
+        // All this method actually does.
         new Impl(*this, rect, std::move(fn));
-    }
+    } // listFeatures
 
+    /*! Definition of a callback function that need to provide the data for a write.
+     *
+     *  The function must return immediately.
+     *
+     *  \param point. The buffer for the data.
+     *  \return true if we are to write data, false if all data has been written and
+     *      we are done.
+     */
     using on_ready_to_write_point_cb_t = std::function<bool(::routeguide::Point& point)>;
-    using on_done_route_summary_cb_t = std::function<
-        void(const grpc::Status& status, ::routeguide::RouteSummary&)>;
 
+    /*! Definition of a callback function that is called when the RPC is complete.
+     *
+     *  \param status. The status for the RPC.
+     *  \param summary. The reply from the server. Only valid is `staus.ok()` is true.
+     */
+    using on_done_route_summary_cb_t = std::function<
+        void(const grpc::Status& status, ::routeguide::RouteSummary& summary)>;
+
+    /*! Naive implementation of `RecordRoute` with callbacks for the events.
+     */
     void recordRoute(on_ready_to_write_point_cb_t&& writerCb, on_done_route_summary_cb_t&& doneCb) {
 
+        /*! A class that deals with this RPC
+         *
+         *  It overrides the events we need, owns our buffers and implements
+         *  our boilerplate code needed to call the user supplied callback.
+         */
         class Impl
+            // Our shared code for all the RPC's we implementn here
             : Base
+            // The async gRPC stream interface for this RPC
             , grpc::ClientWriteReactor<::routeguide::Point> {
         public:
             Impl(EverythingCallbackClient& owner,
@@ -179,24 +240,40 @@ public:
             {
                 LOG_TRACE << "recordRoute starting async request.";
 
+                // Glue this instance of this class to an initiation
+                // of the RecordRoute RPC.
                 owner_.stub_->async()->RecordRoute(&ctx_, &resp_, this);
 
+                // Start the first async write operation on the stream
                 write();
 
                 // Here we will initiate the actual async RPC
                 StartCall();
             }
 
+            /*! Callback event when a write operation is complete */
             void OnWriteDone(bool ok) override {
+                if (!ok) [[unlikely]] {
+                    LOG_WARN << "RecordRoute - Failed to write to the stream: ";
+
+                    // Once failed here, we cannot write any more.
+                    return StartWritesDone();
+                }
+
+                // One write operation was completed.
+                // Off we go with the next one.
                 write();
             }
 
+            /*! Callback event when the RPC is complete */
             void OnDone(const grpc::Status& s) override {
                 done_cb_(s, resp_);
                 delete this;
             }
 
         private:
+
+            // Initiate a new async write operation (if appropriate).
             void write() {
                 // Get another message from the caller
                 req_.Clear();
@@ -208,10 +285,11 @@ public:
                     // Only when we had called `RemoveHold()` the same number of times, would
                     // gRPC consider calling the `OnDone()` event method.
 
-                    StartWrite(&req_);
-                } else {
-                    StartWritesDone();
+                    return StartWrite(&req_);
                 }
+
+                // The caller don't have any further data to write
+                StartWritesDone();
             }
 
             grpc::ClientContext ctx_;
@@ -221,20 +299,47 @@ public:
             on_done_route_summary_cb_t done_cb_;
         };
 
+        // All this method actually does.
         new Impl(*this, writerCb, doneCb);
-    }
+    } // recordRoute
 
-    using on_say_something_cb_t = std::function<bool(::routeguide::RouteNote&)>;
+    /*! Definition of a callback function to provide the next outgoing message.
+     *
+     *  The function must return immediately.
+     *
+     *  \param msg Buffer for the data to send when the function returns.
+     *  \return true if we are to send the message, false if we are done
+     *      sending messages.
+     */
+    using on_say_something_cb_t = std::function<bool(::routeguide::RouteNote& msg)>;
+
+    /*! Definition of a callback function regarging an incoming message.
+     */
     using on_got_message_cb_t = std::function<void(::routeguide::RouteNote&)>;
+
+    /*! Definition of a callback function to notify us that the RPC is complete.
+     */
     using on_done_status_cb_t = std::function<void(const grpc::Status&)>;
 
 
+    /*! Naive implementation of `RecordRoute` with callbacks for the events.
+     *
+     *  As before, we are prepared for a shouting contest, and will start sending
+     *  message as soon as the RPC connection is established.
+     *
+     *  \param outgoing Callback function to provide new messages to send.
+     *  \param incoming Callback function to notify us about an incoming message.
+     *  \param done Callcack to inform us that the RPC is completed, and if
+     *      it was successful.
+     */
     void routeChat(on_say_something_cb_t&& outgoing,
                    on_got_message_cb_t&& incoming,
                    on_done_status_cb_t&& done) {
 
         class Impl
+            // Our shared code for all the RPC's we implementn here
             : Base
+            // The async gRPC stream interface for this RPC
             , grpc::ClientBidiReactor<::routeguide::RouteNote,
                                       ::routeguide::RouteNote>
         {
@@ -249,36 +354,49 @@ public:
 
                 LOG_TRACE << "routeChat starting async request.";
 
+                // Glue this instance of this class to an initiation
+                // of the RouteChat RPC.
                 owner_.stub_->async()->RouteChat(&ctx_, this);
 
+                // Start sending the first outgoing message
                 read();
+
+                // Start receiving the first incoming message
                 write();
 
                 // Here we will initiate the actual async RPC
+                // The queued requests for read and write will be initiated.
                 StartCall();
 
             }
 
+            /*! Callback event when a write operation is complete */
             void OnWriteDone(bool ok) override {
                 write();
             }
+
+            /*! Callback event when a read operation is complete */
             void OnReadDone(bool ok) override {
                 if (ok) {
                     incoming_(in_);
                     read();
                 }
             }
+
+            /*! Callback event when the RPC is complete */
             void OnDone(const grpc::Status& s) override {
                 done_(s);
                 delete this;
             }
 
         private:
+            // Initiate a new async read operation
             void read() {
                 in_.Clear();
                 StartRead(&in_);
             }
 
+            // Initiate a new async write operation (if appropriate).
             void write() {
                 out_.Clear();
                 if (outgoing_(out_)) {
@@ -297,9 +415,11 @@ public:
             on_done_status_cb_t done_;
         };
 
+        // All this method actually does.
         new Impl(*this, outgoing, incoming, done);
-    }
+    } // routeChat
 
+    /*! Example on how to use getFeature() */
     void nextGextFeature(size_t recid) {
         // Initiate a new request
         ::routeguide::Point point;
@@ -323,6 +443,7 @@ public:
         });
     }
 
+    /*! Example on how to use listFeatures() */
     void nextListFeatures(size_t recid) {
         ::routeguide::Rectangle rect;
         rect.mutable_hi()->set_latitude(recid);
@@ -354,6 +475,7 @@ public:
         });
     }
 
+    /*! Example on how to use recordRoute() */
     void nextRecordRoute(size_t recid) {
 
         recordRoute(
@@ -398,7 +520,7 @@ public:
             });
     }
 
-
+     /*! Example on how to use routeChat() */
     void nextRouteChat(size_t recid) {
 
         routeChat(
@@ -438,6 +560,8 @@ public:
 
     }
 
+    /*! Call the example function for the method we are currently using.
+     */
     void nextRequest() {
         static const std::array<std::function<void(size_t)>, 4> request_variants = {
             [this](size_t recid){nextGextFeature(recid);},
@@ -451,6 +575,10 @@ public:
         }
     }
 
+    /*! Run one of the RPC's as specified in Config
+     *
+     *  This method returns when the work is finished.
+     */
     void run() {
 
         // Start the first request(s)
@@ -472,8 +600,9 @@ private:
     // This is a connection to the gRPC server
     std::shared_ptr<grpc::Channel> channel_;
 
-     // An instance of the client that was generated from our .proto file.
+    // An instance of the client that was generated from our .proto file.
     std::unique_ptr<::routeguide::RouteGuide::Stub> stub_;
 
+    // Used to hold the main thread in run() until all the work is done.
     std::promise<void> done_;
 };
