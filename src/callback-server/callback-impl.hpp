@@ -126,11 +126,12 @@ public:
                     reply();
                 }
 
-                // Overrides for the ServerWriteReactor interface
+                /*! Callback event when the RPC is completed */
                 void OnDone() override {
                     done();
                 }
 
+                /*! Callback event when a write operation is complete */
                 void OnWriteDone(bool ok) override {
                     if (!ok) [[unlikely]] {
                         LOG_WARN << "The write-operation failed.";
@@ -152,8 +153,7 @@ public:
                         // Since it's a stream, it make sense to return different data for each message.
                         reply_.set_name(std::string{"stream-reply #"} + std::to_string(replies_));
 
-                        StartWrite(&reply_);
-                        return;
+                        return StartWrite(&reply_);
                     }
 
                     // Didn't write anything, all is done.
@@ -174,19 +174,25 @@ public:
             ::grpc::CallbackServerContext* ctx, ::routeguide::RouteSummary* reply) override {
 
             class ServerReadReactorImpl
+                // Some shared code we need for convenience for all the RPC Request class
                 : public ReqBase<ServerReadReactorImpl>
+                // The async gRPC stream interface for this RPC
                 , public grpc::ServerReadReactor<::routeguide::Point> {
             public:
                 ServerReadReactorImpl(CallbackSvc& owner, ::routeguide::RouteSummary* reply)
                     : owner_{owner}, reply_{reply} {
                     assert(reply_);
+
+                    // Initiate the first read operation
                     StartRead(&req_);
                 }
 
+                 /*! Callback event when the RPC is complete */
                 void OnDone() override {
                     done();
                 }
 
+                /*! Callback event when a read operation is complete */
                 void OnReadDone(bool ok) override {
                     if (ok) {
                         // We have read a message from the request.
@@ -217,16 +223,16 @@ public:
             private:
                 CallbackSvc& owner_;
 
-                // Our buffer for each of the outging messages on the stream
+                // Our buffer for each of the outgoing messages on the stream
                 ::routeguide::Point req_;
 
                 // Note that for this RPC type, gRPC owns the reply-buffer.
-                // It's a bit inconsistent and confusing, as the intefaces mostly takes
-                // pointers, but usually our imlementation onws the buffers.
+                // It's a bit inconsistent and confusing, as the interfaces mostly takes
+                // pointers, but usually our implementation owns the buffers.
                 ::routeguide::RouteSummary *reply_ = {};
             };
 
-            // This is all our method actuially does. It just creates an instance
+            // This is all our method actually does. It just creates an instance
             // of the implementation class to deal with the request.
             return createNew<ServerReadReactorImpl>(owner_, reply);
         };
@@ -237,7 +243,9 @@ public:
             RouteChat(::grpc::CallbackServerContext* ctx) override {
 
             class ServerBidiReactorImpl
+                // Some shared code we need for convenience for all the RPC Request classes
                 : public ReqBase<ServerBidiReactorImpl>
+                // The async gRPC stream interface for this RPC
                 , public grpc::ServerBidiReactor<::routeguide::RouteNote, ::routeguide::RouteNote> {
             public:
                 ServerBidiReactorImpl(CallbackSvc& owner)
@@ -261,12 +269,12 @@ public:
                     write();  // Initiate the first write operation.
                 }
 
-                // All is done event
+                /*! Callback event when the RPC is complete */
                 void OnDone() override {
                     done();
                 }
 
-                // The read operation is done event
+                /*! Callback event when a read operation is complete */
                 void OnReadDone(bool ok) override {
                     if (!ok) {
                         LOG_TRACE << me() << "- The read-operation failed. It's probably not an error :)";
@@ -278,7 +286,7 @@ public:
                     read();
                 }
 
-                // The write operation is done event
+                /*! Callback event when a write operation is complete */
                 void OnWriteDone(bool ok) override {
                     if (!ok) [[unlikely]] {
                         // The operation failed.
@@ -314,6 +322,8 @@ public:
 
                     // Prepare a new message to the stream
                     reply_.Clear();
+
+                    // Shout something nice to the other side
                     reply_.set_message(std::string{"Server Message #"} + std::to_string(replies_));
 
                     // Start new write on the stream
