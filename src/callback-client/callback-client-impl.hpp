@@ -100,16 +100,18 @@ public:
             get_feature_cb_t caller_callback_;
         };
 
+        // This is all our method actually does. It just creates an instance
+        // of the implementation class to deal with the request.
         new Impl(*this, point, std::move(fn));
     } // getFeature
 
 
     /*! Data for a callback function suitable for `ListFeatures`.
      *
-     *  Here we use a union that eiher contains a Feature message received
+     *  Here we use a union that either contains a Feature message received
      *  from the stream, or the final Status message. Alternatively we could have
      *  used two callbacks. However, std::variant (C++ unions) can be useful in
-     *  such cases as this one.
+     *  such cases as this.
      *
      *  We use a pointer to the Feature so that we don't have to make a deep
      *  copy for each received message just for the purpose of "doing the right thing" ;)
@@ -212,7 +214,7 @@ public:
     /*! Definition of a callback function that is called when the RPC is complete.
      *
      *  \param status. The status for the RPC.
-     *  \param summary. The reply from the server. Only valid is `staus.ok()` is true.
+     *  \param summary. The reply from the server. Only valid if `staus.ok()` is true.
      */
     using on_done_route_summary_cb_t = std::function<
         void(const grpc::Status& status, ::routeguide::RouteSummary& summary)>;
@@ -227,7 +229,7 @@ public:
          *  our boilerplate code needed to call the user supplied callback.
          */
         class Impl
-            // Our shared code for all the RPC's we implementn here
+            // Our shared code for all the RPC's we implement here
             : Base
             // The async gRPC stream interface for this RPC
             , grpc::ClientWriteReactor<::routeguide::Point> {
@@ -313,11 +315,15 @@ public:
      */
     using on_say_something_cb_t = std::function<bool(::routeguide::RouteNote& msg)>;
 
-    /*! Definition of a callback function regarging an incoming message.
+    /*! Definition of a callback function regarding an incoming message.
+     *
+     *  The function must return immediately.
      */
     using on_got_message_cb_t = std::function<void(::routeguide::RouteNote&)>;
 
     /*! Definition of a callback function to notify us that the RPC is complete.
+     *
+     *  The function must return immediately.
      */
     using on_done_status_cb_t = std::function<void(const grpc::Status&)>;
 
@@ -337,7 +343,7 @@ public:
                    on_done_status_cb_t&& done) {
 
         class Impl
-            // Our shared code for all the RPC's we implementn here
+            // Our shared code for all the RPC's we implement here
             : Base
             // The async gRPC stream interface for this RPC
             , grpc::ClientBidiReactor<::routeguide::RouteNote,
@@ -400,8 +406,7 @@ public:
             void write() {
                 out_.Clear();
                 if (outgoing_(out_)) {
-                    StartWrite(&out_);
-                    return;
+                    return StartWrite(&out_);
                 }
 
                 StartWritesDone();
@@ -420,7 +425,7 @@ public:
     } // routeChat
 
     /*! Example on how to use getFeature() */
-    void nextGextFeature(size_t recid) {
+    void nextGetFeature(size_t recid) {
         // Initiate a new request
         ::routeguide::Point point;
         point.set_latitude(recid);
@@ -480,7 +485,7 @@ public:
 
         recordRoute(
             // Callback to provide data to send to the server
-            // Note that we instatiate a local variable `count` that lives
+            // Note that we instantiate a local variable `count` that lives
             // in the scope of one instance of the lambda function.
             [this, recid, count=size_t{0}](::routeguide::Point& point) mutable {
                 if (++count > config_.num_stream_messages) [[unlikely]] {
@@ -508,7 +513,7 @@ public:
             // Callback to handle the completion of the request and its status/reply.
             [this, recid](const grpc::Status& status, ::routeguide::RouteSummary& summery) mutable {
                 if (!status.ok()) {
-                    LOG_WARN << "RecordRoute reuest # " << recid
+                    LOG_WARN << "RecordRoute request # " << recid
                              << " failed: " << status.error_message();
                     return;
                 }
@@ -520,7 +525,7 @@ public:
             });
     }
 
-     /*! Example on how to use routeChat() */
+    /*! Example on how to use routeChat() */
     void nextRouteChat(size_t recid) {
 
         routeChat(
@@ -531,7 +536,8 @@ public:
                     return false;
                 }
 
-                // Just pick some data to set.
+                // Say something thoughtful to make us look smart.
+                // Something to print on T-shirts and make memes from ;)
                 msg.set_message(std::string{"chat message "} + std::to_string(count));
 
                 LOG_TRACE << "RouteChat reuest# " << recid
@@ -540,12 +546,12 @@ public:
                 return true;
             },
             // We received an incoming message
-            [this, recid ](::routeguide::RouteNote& msg) {
+            [this, recid](::routeguide::RouteNote& msg) {
                 LOG_TRACE << "RouteChat reuest# " << recid
                           << " incoming message: " << msg.message();
             },
             // The conversation is over.
-            [this, recid ](const grpc::Status& status) {
+            [this, recid](const grpc::Status& status) {
                 if (!status.ok()) {
                     LOG_WARN << "RouteChat reuest # " << recid
                              << " failed: " << status.error_message();
@@ -555,16 +561,14 @@ public:
                 LOG_TRACE << "RecordRoute request #" << recid << " is done.";
                 nextRequest();
             }
-
             );
-
     }
 
     /*! Call the example function for the method we are currently using.
      */
     void nextRequest() {
         static const std::array<std::function<void(size_t)>, 4> request_variants = {
-            [this](size_t recid){nextGextFeature(recid);},
+            [this](size_t recid){nextGetFeature(recid);},
             [this](size_t recid){nextListFeatures(recid);},
             [this](size_t recid){nextRecordRoute(recid);},
             [this](size_t recid){nextRouteChat(recid);},
