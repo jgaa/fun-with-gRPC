@@ -352,7 +352,7 @@ public:
                 // If this was a framework, this is where we would have called
                 // `onRecordRouteReadyToSendFirst()` or or unblocked the next statement
                 // in a co-routine waiting for the next state
-                req_.set_latitude(50);
+                req_.set_latitude(client_id_);
                 req_.set_longitude(sent_messages_);
                 rpc_->Write(req_, write_handle.tag());
                 break;
@@ -382,7 +382,7 @@ public:
                 // This is usually cheaper than creating a new one for each read operation.
                 req_.Clear();
 
-                req_.set_latitude(100);
+                req_.set_latitude(client_id_);
                 req_.set_longitude(sent_messages_);
 
                 // Now, lets register another write operation

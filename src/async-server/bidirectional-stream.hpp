@@ -264,7 +264,7 @@ public:
 
                         // Before we do anything else, we must create a new instance
                         // so the service can handle a new request from a client.
-                        owner_.createNew<RecordRouteRequest>(owner);
+                        owner_.createNew<RouteChatRequest>(owner);
 
                         /* There are multiple ways to handle the message-flow in a bidirectional stream.
                          *

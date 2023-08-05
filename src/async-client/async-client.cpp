@@ -78,10 +78,9 @@ int main(int argc, char* argv[]) {
          "Network address to use for gRPC.")
         ("client,c",
          po::value(&client_type)->default_value(client_type),
-         "Client-type to run. One of: 'first', 'second'. "
+         "Client-type to run. One of: 'first', 'second', or 'third'. "
          "First implements only the unary RPC method. Second implements the unary "
-         "methods and streams in one direction.")
-
+         "methods and streams in one direction, Third implements all methods.")
         ("request-type,t",
          // Ugly, but valid.
          po::value(reinterpret_cast<int *>(&config.request_type))

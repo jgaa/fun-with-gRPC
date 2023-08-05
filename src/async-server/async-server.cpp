@@ -119,9 +119,9 @@ int main(int argc, char* argv[]) {
          "Network address to use for gRPC.")
         ("server,s",
          po::value(&server_type)->default_value(server_type),
-         "Server-type to run. One of: 'first', 'second'. "
+         "Server-type to run. One of: 'first', 'second' or 'third'. "
          "First implements only the unary RPC method. Second implements the unary "
-         "methods and streams in one direction.")
+         "methods and streams in one direction. Third implement all the methods.")
         ("log-to-console,C",
          po::value(&log_level_console)->default_value(log_level_console),
          "Log-level to the console; one of 'info', 'debug', 'trace'. Empty string to disable.")

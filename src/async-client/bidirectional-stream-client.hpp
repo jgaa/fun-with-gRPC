@@ -49,7 +49,7 @@ public:
                     if (status_.ok()) {
                         LOG_TRACE << me(*this) << " - Request successful. Message: " << reply_.name();
 
-                        owner.createNext<GetFeatureRequest>();
+                        static_cast<EverythingClient&>(owner_).nextRequest();
                     } else {
                         LOG_WARN << me(*this) << " - The request failed with error-message: "
                                  << status_.error_message();
@@ -101,7 +101,7 @@ public:
 
                     if (status_.ok()) {
                         LOG_TRACE << me(*this) << " - Initiating a new request";
-                        static_cast<EverythingClient&>(owner_).createNext<ListFeaturesRequest>();
+                        static_cast<EverythingClient&>(owner_).nextRequest();
                     } else {
                         LOG_WARN << me(*this) << " - The request finished with error-message: "
                                  << status_.error_message();
@@ -178,6 +178,9 @@ public:
             rpc_->Finish(&status_, finish_handle_.tag(
                 Handle::Operation::FINISH,
                 [this](bool ok, Handle::Operation /* op */) mutable {
+
+                    LOG_TRACE << me(*this) << " in finished";
+
                     if (!ok) [[unlikely]] {
                         LOG_WARN << me(*this) << " - The request failed (connect).";
                         return;
@@ -185,7 +188,7 @@ public:
 
                     if (status_.ok()) {
                         LOG_TRACE << me(*this) << " - Initiating a new request";
-                        static_cast<EverythingClient&>(owner_).createNext<RouteChatRequest>();
+                        static_cast<EverythingClient&>(owner_).nextRequest();
                     } else {
                         LOG_WARN << me(*this) << " - The request finished with error-message: "
                                  << status_.error_message();
@@ -282,7 +285,7 @@ public:
 
                     if (status_.ok()) {
                         LOG_TRACE << me(*this) << " - Initiating a new request";
-                        static_cast<EverythingClient&>(owner_).createNext<RouteChatRequest>();
+                        static_cast<EverythingClient&>(owner_).nextRequest();
                     } else {
                         LOG_WARN << me(*this) << " - The request finished with error-message: "
                                  << status_.error_message();

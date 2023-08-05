@@ -39,16 +39,6 @@ void runClient() {
 }
 
 void process() {
-//    if (client_type == "first") {
-//        runClient<SimpleReqResClient>();
-//    } else if (client_type == "second") {
-//        runClient<UnaryAndSingleStreamClient>();
-//    } else if (client_type == "third") {
-//        runClient<EverythingClient>();
-//    } else {
-//        throw runtime_error{"Unknows client-type: "s + client_type};
-//    }
-
     runClient<EverythingCallbackClient>();
 }
 

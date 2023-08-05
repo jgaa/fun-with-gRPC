@@ -33,6 +33,8 @@ public:
         // Use make_uniqe, so we destroy the object if it throws an exception
         // (for example out of memory).
         try {
+            LOG_TRACE << "createNew: "
+                      << boost::typeindex::type_id_with_cvr<T>().pretty_name();
             new T(parent, service, cq);
 
             // If we got here, the instance should be fine, so let it handle itself.
@@ -64,17 +66,30 @@ public:
 
         void done() {
             // Ugly, ugly, ugly
-            LOG_TRACE << "If the program crash now, it was a bad idea to delete this ;)";
+            LOG_TRACE << me(*this)
+                      << " If the program crash now, it was a bad idea to delete this ;)";
             delete this;
         }
 
+        template <typename reqT>
+        static std::string me(reqT& req) {
+            return boost::typeindex::type_id_runtime(req).pretty_name()
+                   + " #"
+                   + std::to_string(req.rpc_id_);
+        }
 
     protected:
+        static size_t getNewReqestId() noexcept {
+            static size_t id = 0;
+            return ++id;
+        }
+
         // The state required for all requests
         UnaryAndSingleStreamSvc& parent_;
         ::routeguide::RouteGuide::AsyncService& service_;
         ::grpc::ServerCompletionQueue& cq_;
         ::grpc::ServerContext ctx_;
+        const size_t rpc_id_ = getNewReqestId();
     };
 
     /*! Implementation for the `GetFeature()` RPC call.
@@ -106,7 +121,7 @@ public:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
                     // Let's end it here.
-                    LOG_WARN << "The request-operation failed. Assuming we are shutting down";
+                    LOG_WARN << me(*this) << " The request-operation failed. Assuming we are shutting down";
                     return done();
                 }
 
@@ -135,7 +150,7 @@ public:
             case State::REPLIED:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
-                    LOG_WARN << "The reply-operation failed.";
+                    LOG_WARN << me(*this) << " The reply-operation failed.";
                 }
 
                 state_ = State::DONE; // Not required, but may be useful if we investigate a crash.
@@ -144,7 +159,7 @@ public:
                 return done();
 
             default:
-                LOG_ERROR << "Logic error / unexpected state in proceed()!";
+                LOG_ERROR << me(*this) << " Logic error / unexpected state in proceed()!";
             } // switch
         }
 
@@ -189,9 +204,11 @@ public:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
                     // Let's end it here.
-                    LOG_WARN << "The request-operation failed. Assuming we are shutting down";
+                    LOG_WARN << me(*this) << " The request-operation failed. Assuming we are shutting down";
                     return done();
                 }
+
+                LOG_DEBUG << "Got new RPC from " << ctx_.peer();
 
                 // Before we do anything else, we must create a new instance
                 // so the service can handle a new request from a client.
@@ -203,7 +220,7 @@ public:
             case State::REPLYING:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
-                    LOG_WARN << "The reply-operation failed.";
+                    LOG_WARN << me(*this) << " The reply-operation failed.";
                 }
 
                 if (++replies_ > parent_.config_.num_stream_messages) {
@@ -240,7 +257,7 @@ public:
             case State::FINISHING:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
-                    LOG_WARN << "The finish-operation failed.";
+                    LOG_WARN << me(*this) << "The finish-operation failed.";
                 }
 
                 state_ = State::DONE; // Not required, but may be useful if we investigate a crash.
@@ -249,7 +266,7 @@ public:
                 return done();
 
             default:
-                LOG_ERROR << "Logic error / unexpected state in proceed()!";
+                LOG_ERROR << me(*this) << "Logic error / unexpected state in proceed()!";
             } // switch
         }
 
@@ -286,16 +303,27 @@ public:
             service_.RequestRecordRoute(&ctx_, &reader_, &cq_, &cq_, this);
         }
 
+        auto toString(State state) const {
+            std::array<std::string_view, 4> states = {
+                "CREATED", "READING", "FINISHING", "DONE"
+            };
+            return states.at(static_cast<size_t>(state));
+        }
+
         // State-machine to deal with a single request
         // This works almost like a co-routine, where we work our way down (or repeat) for each
         // time we are called. The State_ could just as well have been an integer/counter;
         void proceed(bool ok) override {
+            LOG_TRACE << me(*this) << " proceed state="
+                      << toString(state_)
+                      << ", ok=" << ok;
+
             switch(state_) {
             case State::CREATED:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
                     // Let's end it here.
-                    LOG_WARN << "The request-operation failed.";
+                    LOG_WARN << me(*this) << " The request-operation failed.";
                     return done();
                 }
 
@@ -303,9 +331,11 @@ public:
                 // so the service can handle a new request from a client.
                 createNew<RecordRouteRequest>(parent_, service_, cq_);
 
+                LOG_DEBUG << me(*this) << " Got new RPC from " << ctx_.peer();
+
                 // Initiate the first read operation
-                reader_.Read(&req_, this);
                 state_ = State::READING;
+                reader_.Read(&req_, this);
                 break;
 
             case State::READING:
@@ -315,7 +345,7 @@ public:
                     // As far as I know, there is no way at this point to deduce if the false status is
                     // because the client is done sending messages, or because we encountered
                     // an error.
-                    LOG_TRACE << "The read-operation failed. It's probably not an error :)";
+                    LOG_TRACE << me(*this) << " The read-operation failed. It's probably not an error :)";
 
                     // Initiate the finish operation
 
@@ -340,7 +370,7 @@ public:
                 // in a co-routine awaiting the next state-change.
                 //
                 // In our case, let's just log it.
-                LOG_TRACE << "Got message: longitude=" << req_.longitude()
+                LOG_TRACE << me(*this) << " Got message: longitude=" << req_.longitude()
                           << ", latitude=" << req_.latitude();
 
                 // Prepare the reply-object to be re-used.
@@ -357,8 +387,10 @@ public:
             case State::FINISHING:
                 if (!ok) [[unlikely]] {
                     // The operation failed.
-                    LOG_WARN << "The finish-operation failed.";
+                    LOG_WARN << me(*this) << "The finish-operation failed.";
                 }
+
+                LOG_TRACE << "Finished OK";
 
                 state_ = State::DONE; // Not required, but may be useful if we investigate a crash.
 
@@ -366,7 +398,7 @@ public:
                 return done();
 
             default:
-                LOG_ERROR << "Logic error / unexpected state in proceed()!";
+                LOG_ERROR << me(*this) << "Logic error / unexpected state in proceed()!";
             } // switch
         }
 
@@ -398,7 +430,7 @@ public:
     }
 
     void run() {
-        init();
+       init();
 
        // Prepare for the first request for each reqest type.
        createNew<GetFeatureRequest>(*this, service_, *cq_);
@@ -423,11 +455,11 @@ public:
            // So, here we deal with the first of the three states: The status from Next().
            switch(status) {
            case grpc::CompletionQueue::NextStatus::TIMEOUT:
-               LOG_DEBUG << "AsyncNext() timed out.";
+               LOG_TRACE << "AsyncNext() timed out.";
                continue;
 
            case grpc::CompletionQueue::NextStatus::GOT_EVENT:
-               LOG_DEBUG << "AsyncNext() returned an event. The status is "
+               LOG_TRACE << "AsyncNext() returned an event. The status is "
                          << (ok ? "OK" : "FAILED");
 
                // Use a scope to allow a new variable inside a case statement.
