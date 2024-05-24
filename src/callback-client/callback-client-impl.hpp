@@ -3,6 +3,7 @@
 #include <atomic>
 #include <future>
 #include <deque>
+#include <variant>
 
 #include <boost/type_index.hpp>
 #include <boost/type_index/runtime_cast/register_runtime_class.hpp>
