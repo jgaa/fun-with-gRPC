@@ -5,6 +5,8 @@ project(fun-with-grpc
     VERSION 0.2.0
     LANGUAGES CXX)
 
+option(WITH_QT "Enable QT client" OFF)
+
 add_definitions(-DVERSION=\"${CMAKE_PROJECT_VERSION}\")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -35,4 +37,6 @@ add_subdirectory(src/async-client)
 add_subdirectory(src/callback-server)
 add_subdirectory(src/callback-client)
 
-
+if (WITH_QT)
+    add_subdirectory(src/qt_client)
+endif()

@@ -82,7 +82,7 @@ int main(int argc, char* argv[]) {
          "Number of messages to send in a stream (for requests with an outgoing stream).")
         ("queue-work-around,q",
          po::value(&config.do_push_back_on_queue)->default_value(config.do_push_back_on_queue),
-         "Work-around to put all async operations at the end of the qork-queue.")
+         "Work-around to put all async operations at the end of the work-queue.")
         ;
 
     const auto appname = filesystem::path(argv[0]).stem().string();
