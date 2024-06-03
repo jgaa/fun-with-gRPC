@@ -69,16 +69,27 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 
 add_dependencies(${PROJECT_NAME} logfault GrpcClient RouteGuideLib)
 
+target_link_libraries(GrpcClient
+    PRIVATE
+    RouteGuideLib
+    Qt6::Core
+    Qt6::Protobuf
+    Qt6::Grpc
+)
+
 target_link_libraries(${PROJECT_NAME}
     PRIVATE
+        GrpcClient
+        RouteGuideLib
         Qt6::Core
+        Qt6::Concurrent
         Qt6::Gui
         Qt6::Quick
         Qt6::QuickControls2
         Qt6::Svg
         Qt6::Protobuf
         Qt6::Grpc
-        Qt6::Concurrent
-        GrpcClient
-        RouteGuideLib
 )
+
+qt_import_qml_plugins(${PROJECT_NAME})
+qt_finalize_executable(${PROJECT_NAME})
