@@ -3,6 +3,8 @@
 #include <queue>
 #include <QObject>
 #include <QQmlEngine>
+#include <QProtobufMessage>
+#include <QGrpcClientStream>
 
 #include "route_guide_client.grpc.qpb.h"
 
@@ -53,7 +55,7 @@ public:
         auto exec = [this, call=std::move(call), done=std::move(done), args...]() {
             auto rpc_method = call(args...);
             rpc_method->subscribe(this, [this, rpc_method, done=std::move(done)] () {
-                    respT rval = rpc_method-> template read<respT>();
+                    std::optional<respT> rval = rpc_method-> template read<respT>();
                     if constexpr (ValidFunctor<doneT, respT>) {
                         done(rval);
                     } else {

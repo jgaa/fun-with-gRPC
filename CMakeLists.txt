@@ -5,8 +5,8 @@ project(fun-with-grpc
     VERSION 0.3.0
     LANGUAGES CXX)
 
-option(WITH_CLI "Enable the non-QT applications" ON)
-option(WITH_QT "Enable QT client" OFF)
+option(WITH_CLI "Enable the non-QT applications" OFF)
+option(WITH_QT "Enable QT client" ON)
 
 add_definitions(-DVERSION=\"${CMAKE_PROJECT_VERSION}\")
 

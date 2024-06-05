@@ -36,10 +36,15 @@ void ServerComm::getFeature()
     callRpc<routeguide::Feature>([&] {
         LOG_DEBUG << "Calling GetFeature...";
         return client_.GetFeature(point); // Call the gRPC method
-    }, [this](const routeguide::Feature& feature) {
+    }, [this](const std::optional<routeguide::Feature>& feature) {
         // Handle the result
-        LOG_DEBUG << "Got Feature!";
-        setStatus("Got Feature: " + feature.name());
+        if (feature) {
+            LOG_DEBUG << "Got Feature!";
+            setStatus("Got Feature: " + feature->name());
+        } else {
+            LOG_DEBUG << "Failed to get Feature!";
+            setStatus("Failed to get Feature");
+        }
     });
 }
 
@@ -64,9 +69,10 @@ void ServerComm::listFeatures()
             return;
         }
 
-        const auto msg = stream->read<routeguide::Feature>();
-        emit receivedMessage("Got feature: " + msg.name());
-        setStatus(status_ + "Got feature: " + msg.name() + "\n");
+        if (const auto msg = stream->read<routeguide::Feature>()) {
+            emit receivedMessage("Got feature: " + msg->name());
+            setStatus(status_ + "Got feature: " + msg->name() + "\n");
+        }
     });
 
     connect (stream.get(), &QGrpcServerStream::finished, [this] {
@@ -95,9 +101,10 @@ void ServerComm::recordRoute()
 
     connect(stream.get(), &QGrpcClientStream::finished, [this, stream=stream.get()] {
         LOG_DEBUG << "Stream finished signal.";
-        auto msg = stream->read<routeguide::RouteSummary>();
-        setStatus(status_ + "Finished trip with " + QString::number(msg.pointCount()) + " points\n");
 
+        if (auto msg = stream->read<routeguide::RouteSummary>()) {
+            setStatus(status_ + "Finished trip with " + QString::number(msg->pointCount()) + " points\n");
+        }
     });
 }
 
@@ -134,9 +141,10 @@ void ServerComm::routeChat()
     routeChatStream_ = client_.streamRouteChat(routeguide::RouteNote());
 
     connect(routeChatStream_.get(), &QGrpcBidirStream::messageReceived, [this, stream=routeChatStream_.get()] {
-        const auto msg = stream->read<routeguide::RouteNote>();
-        emit receivedMessage("Got chat message: " + msg.message());
-        setStatus(status_ + "Got chat message: " + msg.message() + "\n");
+        if (const auto msg = stream->read<routeguide::RouteNote>()) {
+            emit receivedMessage("Got chat message: " + msg->message());
+            setStatus(status_ + "Got chat message: " + msg->message() + "\n");
+        }
     });
 
     connect(routeChatStream_.get(), &QGrpcBidirStream::finished, [this] {
