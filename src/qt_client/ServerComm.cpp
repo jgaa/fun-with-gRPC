@@ -5,6 +5,27 @@
 
 #include "ServerComm.h"
 
+namespace {
+
+// At the time of implementation, the QGrpcServerStream class does not yet have a
+// writesDone() method. This is a workaround to check if the method exists
+// and use if it does.
+template <typename T>
+concept hasWritesDone = requires(T t) {
+    t->writesDone();
+};
+
+template <typename T>
+void  finishWrite(T& stream) {
+    stream->cancel();
+}
+
+template <hasWritesDone T>
+void  finishWrite(T& stream) {
+    stream->writesDone();
+}
+
+} // anon ns
 
 
 ServerComm::ServerComm(QObject *parent)
@@ -110,11 +131,11 @@ void ServerComm::recordRoute()
 
 void ServerComm::sendRouteUpdate()
 {
-    if (auto stream = recordRouteStream_) {
+    if (recordRouteStream_) {
         routeguide::Point point;
         point.setLatitude(1);
         point.setLongitude(2);
-        stream->sendMessage(point);
+        recordRouteStream_->sendMessage(point);
         setStatus(status_ + "Sent one route update\n");
     } else {
         setStatus("ERROR: The RecordRoute stream has gone!");
@@ -124,11 +145,8 @@ void ServerComm::sendRouteUpdate()
 
 void ServerComm::finishRecordRoute()
 {
-    if (auto stream = recordRouteStream_) {
-
-        // I have not found a proper way to Finish the stream.
-        // This is the closest I got...
-        stream->cancel();
+    if (recordRouteStream_) {
+        finishWrite(recordRouteStream_);
         setStatus(status_ + "Finished sending route updates\n");
     } else {
         setStatus("ERROR: The RecordRoute stream has gone!");
@@ -160,10 +178,10 @@ void ServerComm::routeChat()
 
 void ServerComm::sendChatMessage(const QString& message)
 {
-    if (auto stream = routeChatStream_) {
+    if (routeChatStream_) {
         routeguide::RouteNote note;
         note.setMessage(message);
-        stream->sendMessage(note);
+        routeChatStream_->sendMessage(note);
         setStatus(status_ + "Sent one chat message\n");
     } else {
         setStatus("ERROR: The RouteChat stream has gone!");
@@ -173,9 +191,8 @@ void ServerComm::sendChatMessage(const QString& message)
 
 void ServerComm::finishRouteChat()
 {
-    // ???
-    if (auto stream = routeChatStream_) {
-        stream->cancel();
+    if (routeChatStream_) {
+        finishWrite(routeChatStream_);
         setStatus(status_ + "Finished sending chat messages\n");
     } else {
         setStatus("ERROR: The RouteChat stream has gone!");
