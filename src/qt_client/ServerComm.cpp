@@ -5,29 +5,6 @@
 
 #include "ServerComm.h"
 
-namespace {
-
-// At the time of implementation, the QGrpcServerStream class does not yet have a
-// writesDone() method. This is a workaround to check if the method exists
-// and use if it does.
-template <typename T>
-concept hasWritesDone = requires(T t) {
-    t->writesDone();
-};
-
-template <typename T>
-void  finishWrite(T& stream) {
-    stream->cancel();
-}
-
-template <hasWritesDone T>
-void  finishWrite(T& stream) {
-    stream->writesDone();
-}
-
-} // anon ns
-
-
 ServerComm::ServerComm(QObject *parent)
     : QObject(parent)
 {
@@ -38,10 +15,11 @@ ServerComm::ServerComm(QObject *parent)
 
 void ServerComm::start(const QString &serverAddress)
 {
-    auto channelOptions = QGrpcChannelOptions{QUrl(serverAddress,
-                                                   QUrl::StrictMode)};
+    auto channelOptions = QGrpcChannelOptions{};
 
-    client_.attachChannel(std::make_shared<QGrpcHttp2Channel>(channelOptions));
+    client_.attachChannel(std::make_shared<QGrpcHttp2Channel>(
+        QUrl(serverAddress, QUrl::StrictMode),
+        channelOptions));
     LOG_INFO << "Using server at " << serverAddress;
 
     setReady(true);
@@ -80,7 +58,7 @@ void ServerComm::listFeatures()
     rect.lo().setLatitude(4);
 
     // The stream is owned by client_.
-    auto stream = client_.streamListFeatures(rect);
+    auto stream = client_.ListFeatures(rect);
 
     connect(stream.get(), &QGrpcServerStream::messageReceived, [this, stream=stream.get()] {
         LOG_DEBUG << "Got message signal";
@@ -100,25 +78,15 @@ void ServerComm::listFeatures()
         LOG_DEBUG << "Stream finished signal.";
         emit streamFinished();
     });
-
-    connect (stream.get(), &QGrpcServerStream::errorOccurred, [this] (const QGrpcStatus &status){
-        LOG_DEBUG << "gRPC Stream Error: " << status.message();
-        emit streamFinished();
-    });
 }
 
 void ServerComm::recordRoute()
 {
     // The stream is owned by client_.
-    auto stream = client_.streamRecordRoute(routeguide::Point());
+    auto stream = client_.RecordRoute(routeguide::Point());
     recordRouteStream_ = stream;
 
     setStatus("Send messages...\n");
-
-    connect (stream.get(), &QGrpcServerStream::errorOccurred, [this] (const QGrpcStatus &status){
-        LOG_DEBUG << "gRPC Stream Error: " << status.message();
-        emit streamFinished();
-    });
 
     connect(stream.get(), &QGrpcClientStream::finished, [this, stream=stream.get()] {
         LOG_DEBUG << "Stream finished signal.";
@@ -135,7 +103,7 @@ void ServerComm::sendRouteUpdate()
         routeguide::Point point;
         point.setLatitude(1);
         point.setLongitude(2);
-        recordRouteStream_->sendMessage(point);
+        recordRouteStream_->writeMessage(point);
         setStatus(status_ + "Sent one route update\n");
     } else {
         setStatus("ERROR: The RecordRoute stream has gone!");
@@ -146,7 +114,7 @@ void ServerComm::sendRouteUpdate()
 void ServerComm::finishRecordRoute()
 {
     if (recordRouteStream_) {
-        finishWrite(recordRouteStream_);
+        recordRouteStream_->writesDone();
         setStatus(status_ + "Finished sending route updates\n");
     } else {
         setStatus("ERROR: The RecordRoute stream has gone!");
@@ -156,7 +124,7 @@ void ServerComm::finishRecordRoute()
 
 void ServerComm::routeChat()
 {
-    routeChatStream_ = client_.streamRouteChat(routeguide::RouteNote());
+    routeChatStream_ = client_.RouteChat(routeguide::RouteNote());
 
     connect(routeChatStream_.get(), &QGrpcBidirStream::messageReceived, [this, stream=routeChatStream_.get()] {
         if (const auto msg = stream->read<routeguide::RouteNote>()) {
@@ -169,11 +137,6 @@ void ServerComm::routeChat()
         LOG_DEBUG << "Stream finished signal.";
         emit streamFinished();
     });
-
-    connect(routeChatStream_.get(), &QGrpcBidirStream::errorOccurred, [this] (const QGrpcStatus &status) {
-        LOG_DEBUG << "gRPC Stream Error: " << status.message();
-        emit streamFinished();
-    });
 }
 
 void ServerComm::sendChatMessage(const QString& message)
@@ -181,7 +144,7 @@ void ServerComm::sendChatMessage(const QString& message)
     if (routeChatStream_) {
         routeguide::RouteNote note;
         note.setMessage(message);
-        routeChatStream_->sendMessage(note);
+        routeChatStream_->writeMessage(note);
         setStatus(status_ + "Sent one chat message\n");
     } else {
         setStatus("ERROR: The RouteChat stream has gone!");
@@ -192,7 +155,7 @@ void ServerComm::sendChatMessage(const QString& message)
 void ServerComm::finishRouteChat()
 {
     if (routeChatStream_) {
-        finishWrite(routeChatStream_);
+        routeChatStream_->writesDone();
         setStatus(status_ + "Finished sending chat messages\n");
     } else {
         setStatus("ERROR: The RouteChat stream has gone!");
@@ -219,5 +182,7 @@ void ServerComm::setReady(bool ready)
 void ServerComm::errorOccurred(const QGrpcStatus &status)
 {
     LOG_ERROR << "errorOccurred: Call to gRPC server failed: " << status.message();
+    setStatus(QString{"Error: Call to gRPC server failed: "} + status.message());
+    setReady(false);
 }
 

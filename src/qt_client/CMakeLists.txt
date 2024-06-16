@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(QtGrpcExample VERSION 0.1.0 LANGUAGES CXX)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Svg Test Protobuf Grpc Concurrent Test)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Svg Test Protobuf ProtobufQuick Grpc Concurrent Test)
 
 qt_policy(
     SET QTP0001 NEW
@@ -88,6 +88,7 @@ target_link_libraries(${PROJECT_NAME}
         Qt6::QuickControls2
         Qt6::Svg
         Qt6::Protobuf
+        Qt6::ProtobufQuick
         Qt6::Grpc
 )
 
