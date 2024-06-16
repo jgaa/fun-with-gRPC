@@ -147,7 +147,7 @@ public:
             private:
                 void reply() {
                     // Reply with the number of messages in config
-                    if (++replies_ > owner_.config().num_stream_messages) {
+                    if (++replies_ < owner_.config().num_stream_messages) {
                         reply_.Clear();
 
                         // Since it's a stream, it make sense to return different data for each message.
