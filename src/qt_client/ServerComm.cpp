@@ -49,8 +49,10 @@ void ServerComm::getFeature()
 
 void ServerComm::listFeatures()
 {
+    // Update the status in the UI.
     setStatus("...\n");
 
+    // Prepare some data to send to the server.
     routeguide::Rectangle rect;
     rect.hi().setLatitude(1);
     rect.hi().setLatitude(2);
@@ -60,6 +62,7 @@ void ServerComm::listFeatures()
     // The stream is owned by client_.
     auto stream = client_.ListFeatures(rect);
 
+    // Subscribe for incoming messages.
     connect(stream.get(), &QGrpcServerStream::messageReceived, [this, stream=stream.get()] {
         LOG_DEBUG << "Got message signal";
         if (stream->isFinished()) {
@@ -74,6 +77,7 @@ void ServerComm::listFeatures()
         }
     });
 
+    // Subscribe for the stream finished signal.
     connect (stream.get(), &QGrpcServerStream::finished, [this] {
         LOG_DEBUG << "Stream finished signal.";
         emit streamFinished();
