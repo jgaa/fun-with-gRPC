@@ -53,20 +53,23 @@ public:
     template <typename respT, typename callT, typename doneT, typename ...Args>
     void callRpc(callT&& call, doneT && done, Args... args) {
         auto exec = [this, call=std::move(call), done=std::move(done), args...]() {
-            auto rpc_method = call(args...);
-            rpc_method->subscribe(this, [this, rpc_method, done=std::move(done)] () {
-                    std::optional<respT> rval = rpc_method-> template read<respT>();
-                    if constexpr (ValidFunctor<doneT, respT>) {
-                        done(rval);
-                    } else {
-                        // The done functor must either be valid callable functor, or 'false'
-                        static_assert(std::is_same_v<doneT, bool>);
-                        assert(!done);
-                    }
-                },
-                [this](QGrpcStatus status) {
-                    LOG_ERROR << "Comm error: " << status.message();
-                });
+            auto ptr = call(args...);
+
+            connect(ptr.get(), &QGrpcCallReply::finished, this, [this, ptr=std::move(ptr), done=std::move(done)] (const QGrpcStatus& status) {
+                if (!status.isOk()) [[unlikely]] {
+                    LOG_ERROR <<  "RPC failed: " << toString(status);
+                    return;
+                }
+
+                std::optional<respT> rval = ptr-> template read<respT>();
+                if constexpr (ValidFunctor<doneT, respT>) {
+                    done(rval);
+                } else {
+                    // The done functor must either be valid callable functor, or 'false'
+                    static_assert(std::is_same_v<doneT, bool>);
+                    assert(!done);
+                }
+            });
         };
 
         exec();
@@ -89,11 +92,13 @@ private:
 
     void setStatus(QString status);
     void setReady(bool ready);
+    static QString toString(const QGrpcStatus& status);
 
     routeguide::RouteGuide::Client client_;
     void errorOccurred(const QGrpcStatus &status);
     bool ready_{false};
     QString status_ = "Idle. Please press a button.";
-    std::shared_ptr<QGrpcClientStream> recordRouteStream_;
-    std::shared_ptr<QGrpcBidirStream> routeChatStream_;
+    std::unique_ptr<QGrpcClientStream> recordRouteStream_;
+    std::unique_ptr<QGrpcBidiStream> routeChatStream_;
 };
+

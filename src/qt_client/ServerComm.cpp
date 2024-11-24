@@ -8,9 +8,6 @@
 ServerComm::ServerComm(QObject *parent)
     : QObject(parent)
 {
-    connect(&client_, &routeguide::RouteGuide::Client::errorOccurred,
-            this, &ServerComm::errorOccurred);
-
 }
 
 void ServerComm::start(const QString &serverAddress)
@@ -52,12 +49,18 @@ void ServerComm::listFeatures()
     // Update the status in the UI.
     setStatus("...\n");
 
+    auto point = [](int latitude, int longitude) {
+        routeguide::Point p;
+        p.setLatitude(latitude);
+        p.setLongitude(longitude);
+        return p;
+    };
+
     // Prepare some data to send to the server.
     routeguide::Rectangle rect;
-    rect.hi().setLatitude(1);
-    rect.hi().setLatitude(2);
-    rect.lo().setLatitude(3);
-    rect.lo().setLatitude(4);
+
+    rect.setHi(point(1, 2));
+    rect.setLo(point(3, 4));
 
     // The stream is owned by client_.
     auto stream = client_.ListFeatures(rect);
@@ -87,15 +90,14 @@ void ServerComm::listFeatures()
 void ServerComm::recordRoute()
 {
     // The stream is owned by client_.
-    auto stream = client_.RecordRoute(routeguide::Point());
-    recordRouteStream_ = stream;
+    recordRouteStream_ = client_.RecordRoute(routeguide::Point{});
 
     setStatus("Send messages...\n");
 
-    connect(stream.get(), &QGrpcClientStream::finished, [this, stream=stream.get()] {
+    connect(recordRouteStream_.get(), &QGrpcClientStream::finished, [this] {
         LOG_DEBUG << "Stream finished signal.";
 
-        if (auto msg = stream->read<routeguide::RouteSummary>()) {
+        if (auto msg = recordRouteStream_->read<routeguide::RouteSummary>()) {
             setStatus(status_ + "Finished trip with " + QString::number(msg->pointCount()) + " points\n");
         }
     });
@@ -130,14 +132,14 @@ void ServerComm::routeChat()
 {
     routeChatStream_ = client_.RouteChat(routeguide::RouteNote());
 
-    connect(routeChatStream_.get(), &QGrpcBidirStream::messageReceived, [this, stream=routeChatStream_.get()] {
+    connect(routeChatStream_.get(), &QGrpcBidiStream::messageReceived, [this, stream=routeChatStream_.get()] {
         if (const auto msg = stream->read<routeguide::RouteNote>()) {
             emit receivedMessage("Got chat message: " + msg->message());
             setStatus(status_ + "Got chat message: " + msg->message() + "\n");
         }
     });
 
-    connect(routeChatStream_.get(), &QGrpcBidirStream::finished, [this] {
+    connect(routeChatStream_.get(), &QGrpcBidiStream::finished, [this] {
         LOG_DEBUG << "Stream finished signal.";
         emit streamFinished();
     });
@@ -190,3 +192,31 @@ void ServerComm::errorOccurred(const QGrpcStatus &status)
     setReady(false);
 }
 
+QString ServerComm::toString(const QGrpcStatus& status) {
+    static const auto errors = std::to_array<QString>({
+        tr("OK"),
+        tr("CANCELLED"),
+        tr("UNKNOWN"),
+        tr("INVALID_ARGUMENT"),
+        tr("DEADLINE_EXCEEDED"),
+        tr("NOT_FOUND"),
+        tr("ALREADY_EXISTS"),
+        tr("PERMISSION_DENIED"),
+        tr("RESOURCE_EXHAUSTED"),
+        tr("FAILED_PRECONDITION"),
+        tr("ABORTED"),
+        tr("OUT_OF_RANGE"),
+        tr("UNIMPLEMENTED"),
+        tr("INTERNAL"),
+        tr("UNAVAILABLE"),
+        tr("DATA_LOSS"),
+        tr("UNAUTHENTICATED"),
+    });
+
+    const auto ix = static_cast<size_t>(status.code());
+    if (ix < errors.size()) {
+        return errors[ix] + ": " + status.message();
+    }
+
+    return tr("UNKNOWN (code=%1): %2").arg(ix).arg(status.message());
+}
